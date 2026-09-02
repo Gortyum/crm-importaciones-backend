@@ -1,21 +1,2 @@
-INFO:     127.0.0.1:54417 - "POST /api/importaciones/ HTTP/1.1" 201 Created
-INFO:     127.0.0.1:56852 - "GET /api/clientes/ HTTP/1.1" 200 OK
-INFO:     127.0.0.1:56852 - "POST /api/importaciones/3/pasar-a-cotizacion HTTP/1.1" 200 OK
-INFO:     127.0.0.1:56852 - "GET /api/cotizaciones/1 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:56852 - "POST /api/cotizaciones/1/crear-importacion HTTP/1.1" 400 Bad Request
-INFO:     127.0.0.1:53758 - "POST /api/cotizaciones/ HTTP/1.1" 201 Created
-INFO:     127.0.0.1:53758 - "POST /api/cotizaciones/2/crear-importacion HTTP/1.1" 200 OK
-INFO:     127.0.0.1:53758 - "PATCH /api/importaciones/3/estado HTTP/1.1" 200 OK
-INFO:     127.0.0.1:53758 - "GET /api/config/ HTTP/1.1" 200 OK
-INFO:     127.0.0.1:53758 - "GET /api/proveedor-categorias/ HTTP/1.1" 200 OK
-INFO:     127.0.0.1:51186 - "POST /api/importaciones/ HTTP/1.1" 201 Created
-INFO:     127.0.0.1:62493 - "GET /api/importaciones/ HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49805 - "GET /api/proveedores/ HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64167 - "GET /api/clientes/ HTTP/1.1" 200 OK
-INFO:     127.0.0.1:51412 - "GET /api/proveedores/ HTTP/1.1" 200 OK
-INFO:     127.0.0.1:53684 - "GET /api/productos/ HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49682 - "GET /api/cotizaciones/ HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49686 - "GET /api/proveedores/ HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49683 - "GET /api/clientes/ HTTP/1.1" 200 OK
-INFO:     127.0.0.1:58718 - "GET /api/productos/ HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49695 - "GET /api/cotizaciones/ HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53058 - "POST /api/clientes/ HTTP/1.1" 201 Created
+INFO:     127.0.0.1:60398 - "GET /api/clientes/ HTTP/1.1" 200 OK
