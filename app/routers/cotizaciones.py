@@ -1,0 +1,249 @@
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+
+from app.database import get_db
+from app.models.cotizacion import Cotizacion, ItemCotizacion
+from app.models.cliente import Cliente, Contacto
+from app.models.importacion import Importacion, ImportacionItem, ImportacionProveedor
+from app.schemas.cotizacion import (
+    CotizacionCreate,
+    CotizacionOut,
+    CotizacionUpdateEstado,
+    CotizacionPDFData,
+    ItemCotizacionPDF,
+)
+from app.services.cotizacion_engine import calcular_item
+
+router = APIRouter(prefix="/api/cotizaciones", tags=["cotizaciones"])
+
+ESTADOS_VALIDOS = ["Creada", "Enviada", "Cerrada", "En Produccion", "Entregada", "Cancelada"]
+
+TRANSICIONES = {
+    "Creada": ["Enviada", "Cancelada"],
+    "Enviada": ["Cerrada", "Cancelada"],
+    "Cerrada": ["En Produccion", "Cancelada"],
+    "En Produccion": ["Entregada", "Cancelada"],
+    "Entregada": [],
+    "Cancelada": [],
+}
+
+
+def generar_correlativo(db: Session) -> str:
+    anio = datetime.now().year
+    ultimo = db.query(Cotizacion).filter(
+        Cotizacion.correlativo.like(f"COT-{anio}-%")
+    ).order_by(Cotizacion.id.desc()).first()
+    if ultimo:
+        num = int(ultimo.correlativo.split("-")[-1]) + 1
+    else:
+        num = 1
+    return f"COT-{anio}-{num:04d}"
+
+
+def _total_cotizacion(cot) -> float:
+    return sum(i.total for i in cot.items)
+
+
+def _completar_out(cot, db) -> CotizacionOut:
+    out = CotizacionOut.model_validate(cot)
+    out.total_general = _total_cotizacion(cot)
+    if cot.importacion_id:
+        imp = db.query(Importacion).get(cot.importacion_id)
+        out.importacion_correlativo = imp.correlativo if imp else ""
+    return out
+
+
+@router.get("/", response_model=list[CotizacionOut])
+def listar_cotizaciones(db: Session = Depends(get_db)):
+    cotizaciones = db.query(Cotizacion).order_by(Cotizacion.created_at.desc()).all()
+    return [_completar_out(c, db) for c in cotizaciones]
+
+
+@router.get("/{cotizacion_id}", response_model=CotizacionOut)
+def obtener_cotizacion(cotizacion_id: int, db: Session = Depends(get_db)):
+    cot = db.query(Cotizacion).get(cotizacion_id)
+    if not cot:
+        raise HTTPException(404, "Cotización no encontrada")
+    return _completar_out(cot, db)
+
+
+@router.post("/", response_model=CotizacionOut, status_code=201)
+def crear_cotizacion(data: CotizacionCreate, db: Session = Depends(get_db)):
+    cliente = db.query(Cliente).get(data.cliente_id)
+    if not cliente:
+        raise HTTPException(400, "Cliente no encontrado")
+
+    correlativo = generar_correlativo(db)
+    cot = Cotizacion(
+        correlativo=correlativo,
+        cliente_id=data.cliente_id,
+        contacto_id=data.contacto_id,
+        divisa_original=data.divisa_original,
+        tipo_cambio=data.tipo_cambio,
+        notas=data.notas,
+        importacion_id=data.importacion_id,
+        estado="Creada",
+        historial_estados=[{"estado": "Creada", "fecha": datetime.now().isoformat()}],
+    )
+    db.add(cot)
+    db.flush()
+
+    for item_data in data.items:
+        calc = calcular_item(item_data, data.tipo_cambio)
+        item = ItemCotizacion(
+            cotizacion_id=cot.id,
+            producto_id=item_data.producto_id,
+            proveedor_id=item_data.proveedor_id,
+            descripcion=item_data.descripcion,
+            cantidad=item_data.cantidad,
+            costo_original=item_data.costo_original,
+            divisa_origen=item_data.divisa_origen,
+            peso_kg=item_data.peso_kg,
+            volumen_m3=item_data.volumen_m3,
+            tipo_flete=item_data.tipo_flete,
+            costo_flete=calc["costo_flete"],
+            costo_envio=item_data.costo_envio,
+            imagen_url=item_data.imagen_url,
+            margen_pct=item_data.margen_pct,
+            descuento_pct=item_data.descuento_pct,
+            tipo_personalizacion=item_data.tipo_personalizacion,
+            iva_pct=item_data.iva_pct,
+            precio_venta_unitario=calc["precio_venta_unitario"],
+            subtotal=calc["subtotal"],
+            iva_monto=calc["iva_monto"],
+            total=calc["total"],
+        )
+        db.add(item)
+
+    db.commit()
+    db.refresh(cot)
+
+    return _completar_out(cot, db)
+
+
+@router.patch("/{cotizacion_id}/estado", response_model=CotizacionOut)
+def cambiar_estado(cotizacion_id: int, data: CotizacionUpdateEstado, db: Session = Depends(get_db)):
+    cot = db.query(Cotizacion).get(cotizacion_id)
+    if not cot:
+        raise HTTPException(404, "Cotización no encontrada")
+
+    if data.estado not in ESTADOS_VALIDOS:
+        raise HTTPException(400, f"Estado inválido: {data.estado}")
+
+    permitidos = TRANSICIONES.get(cot.estado, [])
+    if data.estado not in permitidos:
+        raise HTTPException(
+            400,
+            f"No se puede cambiar de '{cot.estado}' a '{data.estado}'. Transiciones válidas: {permitidos}",
+        )
+
+    historial = cot.historial_estados or []
+    historial.append({"estado": data.estado, "fecha": datetime.now().isoformat()})
+    cot.estado = data.estado
+    cot.historial_estados = historial
+
+    db.commit()
+    db.refresh(cot)
+    return _completar_out(cot, db)
+
+
+@router.post("/{cotizacion_id}/crear-importacion")
+def crear_importacion_desde_cot(cotizacion_id: int, db: Session = Depends(get_db)):
+    from app.routers.importaciones import (
+        generar_correlativo as gen_imp,
+        _guardar_calculos,
+        _serializar,
+        Importacion,
+        ImportacionItem,
+    )
+    from app.schemas.importacion import ImportacionCreate, ImportacionItemCreate
+
+    cot = db.query(Cotizacion).get(cotizacion_id)
+    if not cot:
+        raise HTTPException(404, "Cotización no encontrada")
+    if cot.importacion_id:
+        raise HTTPException(400, "Esta cotización ya está vinculada a una importación")
+
+    items = [
+        ImportacionItemCreate(
+            producto_id=item.producto_id,
+            descripcion=item.descripcion,
+            cantidad=item.cantidad,
+            precio_unitario_fabrica=item.costo_original,
+            divisa=item.divisa_origen,
+            margen_pct=item.margen_pct,
+        )
+        for item in cot.items
+    ]
+    data = ImportacionCreate(
+        transporte="Aereo",
+        items=items,
+        notas=f"Generada desde cotización {cot.correlativo}",
+    )
+
+    desde = Importacion(
+        correlativo=gen_imp(db),
+        transporte=data.transporte,
+        cert_origen=True,
+        tc_usd_clp=920.0,
+        tc_brl_usd=0.18,
+        contingencia_pct=2,
+        notas=data.notas,
+        cotizacion_id=cotizacion_id,
+        estado="Borrador",
+        historial_estados=[{"estado": "Borrador", "fecha": datetime.now().isoformat()}],
+    )
+    db.add(desde)
+    db.flush()
+    for it in data.items:
+        db.add(ImportacionItem(importacion_id=desde.id, **it.model_dump()))
+    cot.importacion_id = desde.id
+    db.commit()
+    db.refresh(desde)
+    _guardar_calculos(desde, db)
+    return _serializar(desde, db)
+
+
+@router.get("/{cotizacion_id}/pdf-data", response_model=CotizacionPDFData)
+def obtener_datos_pdf(cotizacion_id: int, db: Session = Depends(get_db)):
+    cot = db.query(Cotizacion).get(cotizacion_id)
+    if not cot:
+        raise HTTPException(404, "Cotización no encontrada")
+
+    cliente = db.query(Cliente).get(cot.cliente_id)
+    contacto = db.query(Contacto).get(cot.contacto_id) if cot.contacto_id else None
+
+    items_pdf = []
+    for item in cot.items:
+        items_pdf.append(ItemCotizacionPDF(
+            descripcion=item.descripcion,
+            cantidad=item.cantidad,
+            divisa_origen=item.divisa_origen,
+            imagen_url=item.imagen_url,
+            precio_venta_unitario=item.precio_venta_unitario,
+            tipo_personalizacion=item.tipo_personalizacion,
+            subtotal=item.subtotal,
+            iva_monto=item.iva_monto,
+            total=item.total,
+        ))
+
+    subtotal_gral = sum(i.subtotal for i in cot.items)
+    iva_gral = sum(i.iva_monto for i in cot.items)
+    total_gral = sum(i.total for i in cot.items)
+
+    return CotizacionPDFData(
+        correlativo=cot.correlativo,
+        fecha=cot.fecha,
+        cliente_razon_social=cliente.razon_social,
+        cliente_rut=cliente.rut,
+        cliente_direccion=cliente.direccion,
+        contacto_nombre=contacto.nombre if contacto else "",
+        contacto_email=contacto.email if contacto else "",
+        items=items_pdf,
+        subtotal_general=subtotal_gral,
+        iva_general=iva_gral,
+        total_general=total_gral,
+        notas=cot.notas,
+    )
