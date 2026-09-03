@@ -1,5 +1,6 @@
 .env
-.env.local
+.env.*
+!.env.example
 *.db
 uploads/originals/
 uploads/*.webp

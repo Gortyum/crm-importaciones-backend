@@ -28,13 +28,13 @@ from app.services.config_service import ensure_config
 _UPLOAD_ENV = os.getenv("UPLOAD_DIR", "uploads")
 UPLOAD_DIR = (_UPLOAD_ENV if Path(_UPLOAD_ENV).is_absolute() else PROJECT_ROOT / _UPLOAD_ENV).resolve()
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")]
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")]
 
 app = FastAPI(title="CRM/ERP Cotizaciones", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ORIGINS,
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
