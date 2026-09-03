@@ -22,3 +22,5 @@ venv/
 Thumbs.db
 Desktop.ini
 .DS_Store
+server_err.log
+server_out.log

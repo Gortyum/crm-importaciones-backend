@@ -1,11 +1,15 @@
 import io
 import os
 import uuid
+from pathlib import Path
 
 from PIL import Image, ImageEnhance
 from rembg import remove
 
-UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
+from app.database import PROJECT_ROOT
+
+_UPLOAD_ENV = os.getenv("UPLOAD_DIR", "uploads")
+UPLOAD_DIR = str((Path(_UPLOAD_ENV) if Path(_UPLOAD_ENV).is_absolute() else PROJECT_ROOT / _UPLOAD_ENV).resolve())
 ORIG_DIR = os.path.join(UPLOAD_DIR, "originals")
 PROCESSED_DIR = UPLOAD_DIR
 

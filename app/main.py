@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -7,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.database import engine, Base, SessionLocal
+from app.database import engine, Base, SessionLocal, PROJECT_ROOT
 from app.routers import (
     clientes,
     proveedores,
@@ -23,7 +25,9 @@ from app.routers import (
 from app.models.proveedor import ProveedorCategoria
 from app.services.config_service import ensure_config
 
-UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
+_UPLOAD_ENV = os.getenv("UPLOAD_DIR", "uploads")
+UPLOAD_DIR = (_UPLOAD_ENV if Path(_UPLOAD_ENV).is_absolute() else PROJECT_ROOT / _UPLOAD_ENV).resolve()
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")]
 
 app = FastAPI(title="CRM/ERP Cotizaciones", version="0.1.0")

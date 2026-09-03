@@ -1,2 +1,0 @@
-INFO:     127.0.0.1:53058 - "POST /api/clientes/ HTTP/1.1" 201 Created
-INFO:     127.0.0.1:60398 - "GET /api/clientes/ HTTP/1.1" 200 OK
