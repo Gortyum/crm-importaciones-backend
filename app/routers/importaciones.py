@@ -284,7 +284,7 @@ def pasar_a_cotizacion(importacion_id: int, data: PasarACotizacionRequest, db: S
             costo_original=costo,
             margen_pct=max(margen, 0),
         )
-        calc = calcular_item(dummy, 1.0)
+        calc = calcular_item(dummy)
         db.add(ItemCotizacion(
             cotizacion_id=cot.id,
             producto_id=item_db.producto_id,

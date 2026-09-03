@@ -43,6 +43,7 @@ class ItemCotizacion(Base):
     cantidad: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     costo_original: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     divisa_origen: Mapped[str] = mapped_column(String(5), nullable=False, default="CLP")
+    tipo_cambio: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
     peso_kg: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     volumen_m3: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     tipo_flete: Mapped[str] = mapped_column(String(20), nullable=False, default="Terrestre")

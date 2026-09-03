@@ -15,8 +15,10 @@ TARIFAS_FLETE_M3 = {
 
 
 def calcular_costo_flete(item: ItemCotizacionCreate, tipo_cambio: float) -> float:
+    # El flete manual se interpreta en CLP (igual que costo_envio),
+    # por lo que NO se multiplica por el tipo de cambio.
     if item.costo_flete > 0:
-        return item.costo_flete * tipo_cambio
+        return item.costo_flete
 
     tarifa_kg = TARIFAS_FLETE_KG.get(item.tipo_flete, 1800)
     tarifa_m3 = TARIFAS_FLETE_M3.get(item.tipo_flete, 12000)
@@ -27,9 +29,11 @@ def calcular_costo_flete(item: ItemCotizacionCreate, tipo_cambio: float) -> floa
     return max(costo_por_peso, costo_por_volumen)
 
 
-def calcular_item(item: ItemCotizacionCreate, tipo_cambio: float) -> dict:
-    costo_clp = item.costo_original * tipo_cambio
-    flete = calcular_costo_flete(item, tipo_cambio)
+def calcular_item(item: ItemCotizacionCreate) -> dict:
+    # El tipo de cambio vive en el item y corresponde a su divisa_origen:
+    # cuantos CLP vale 1 unidad. Para divisa CLP vale 1 (sin conversion).
+    costo_clp = item.costo_original * item.tipo_cambio
+    flete = calcular_costo_flete(item, item.tipo_cambio)
     envio = item.costo_envio
 
     subtotal_base = (costo_clp + flete + envio) * item.cantidad

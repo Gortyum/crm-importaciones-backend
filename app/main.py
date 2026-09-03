@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -21,7 +21,9 @@ from app.routers import (
     importaciones,
     config,
     upload,
+    auth,
 )
+from app.routers.auth import requiere_autenticacion
 from app.models.proveedor import ProveedorCategoria
 from app.services.config_service import ensure_config
 
@@ -40,16 +42,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(clientes.router)
-app.include_router(proveedores.router)
-app.include_router(proveedor_categorias.router)
-app.include_router(productos.router)
-app.include_router(cotizaciones.router)
-app.include_router(ordenes_compra.router)
-app.include_router(divisas.router)
-app.include_router(importaciones.router)
-app.include_router(config.router)
-app.include_router(upload.router)
+# Rutas publicas: login (autenticarse) y health solo no exigen token.
+# Todo el resto de la API de negocio queda protegida por JWT.
+app.include_router(auth.router)
+
+app.include_router(clientes.router, dependencies=[Depends(requiere_autenticacion)])
+app.include_router(proveedores.router, dependencies=[Depends(requiere_autenticacion)])
+app.include_router(proveedor_categorias.router, dependencies=[Depends(requiere_autenticacion)])
+app.include_router(productos.router, dependencies=[Depends(requiere_autenticacion)])
+app.include_router(cotizaciones.router, dependencies=[Depends(requiere_autenticacion)])
+app.include_router(ordenes_compra.router, dependencies=[Depends(requiere_autenticacion)])
+app.include_router(divisas.router, dependencies=[Depends(requiere_autenticacion)])
+app.include_router(importaciones.router, dependencies=[Depends(requiere_autenticacion)])
+app.include_router(config.router, dependencies=[Depends(requiere_autenticacion)])
+app.include_router(upload.router, dependencies=[Depends(requiere_autenticacion)])
 
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
@@ -57,6 +63,7 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 @app.on_event("startup")
 def on_startup():
     Base.metadata.create_all(bind=engine)
+    _migrar_columnas()
     db = SessionLocal()
     try:
         categorias = ["Mercancia", "Logistica", "Aduana", "Flete Terrestre Local"]
@@ -65,8 +72,21 @@ def on_startup():
             if nombre not in existentes:
                 db.add(ProveedorCategoria(nombre=nombre))
         ensure_config(db)
+        db.commit()
     finally:
         db.close()
+
+
+def _migrar_columnas():
+    from sqlalchemy import text, inspect
+
+    insp = inspect(engine)
+    if "items_cotizacion" in insp.get_table_names():
+        columnas = {c["name"] for c in insp.get_columns("items_cotizacion")}
+        if "tipo_cambio" not in columnas:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE items_cotizacion ADD COLUMN tipo_cambio FLOAT DEFAULT 1.0"))
+                conn.execute(text("UPDATE items_cotizacion SET tipo_cambio = 1.0 WHERE tipo_cambio IS NULL"))
 
 
 @app.get("/api/health")

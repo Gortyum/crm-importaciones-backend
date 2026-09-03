@@ -9,6 +9,7 @@ class ItemCotizacionBase(BaseModel):
     cantidad: int = 1
     costo_original: float = 0
     divisa_origen: str = "CLP"
+    tipo_cambio: float = 1.0
     peso_kg: float = 0
     volumen_m3: float = 0
     tipo_flete: str = "Terrestre"

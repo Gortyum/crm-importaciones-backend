@@ -91,7 +91,7 @@ def crear_cotizacion(data: CotizacionCreate, db: Session = Depends(get_db)):
     db.flush()
 
     for item_data in data.items:
-        calc = calcular_item(item_data, data.tipo_cambio)
+        calc = calcular_item(item_data)
         item = ItemCotizacion(
             cotizacion_id=cot.id,
             producto_id=item_data.producto_id,
@@ -100,6 +100,7 @@ def crear_cotizacion(data: CotizacionCreate, db: Session = Depends(get_db)):
             cantidad=item_data.cantidad,
             costo_original=item_data.costo_original,
             divisa_origen=item_data.divisa_origen,
+            tipo_cambio=item_data.tipo_cambio,
             peso_kg=item_data.peso_kg,
             volumen_m3=item_data.volumen_m3,
             tipo_flete=item_data.tipo_flete,
