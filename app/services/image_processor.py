@@ -4,7 +4,6 @@ import uuid
 from pathlib import Path
 
 from PIL import Image, ImageEnhance
-from rembg import remove
 
 from app.database import PROJECT_ROOT
 
@@ -27,29 +26,6 @@ def _strip_exif(img: Image.Image) -> Image.Image:
     clean = Image.new(img.mode, img.size)
     clean.putdata(data)
     return clean
-
-
-def _remove_background(img: Image.Image) -> Image.Image:
-    result = remove(img)
-    white_bg = Image.new("RGBA", result.size, (255, 255, 255, 255))
-    white_bg.paste(result, mask=result.split()[3])
-    return white_bg.convert("RGB")
-
-
-def _auto_crop(img: Image.Image) -> Image.Image:
-    bg = Image.new("RGB", img.size, (255, 255, 255))
-    diff = Image.eval(img, lambda p: 255 - p)
-    bbox = diff.getbbox()
-    if bbox:
-        padding = 20
-        bbox = (
-            max(0, bbox[0] - padding),
-            max(0, bbox[1] - padding),
-            min(img.width, bbox[2] + padding),
-            min(img.height, bbox[3] + padding),
-        )
-        return img.crop(bbox)
-    return img
 
 
 def _adjust(img: Image.Image) -> Image.Image:
@@ -82,8 +58,6 @@ def process_image(file_contents: bytes, original_filename: str) -> dict:
 
     img = Image.open(io.BytesIO(file_contents))
     img = _strip_exif(img)
-    img = _remove_background(img)
-    img = _auto_crop(img)
     img = _adjust(img)
     img = _resize(img)
 
