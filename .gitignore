@@ -2,12 +2,8 @@
 .env.*
 !.env.example
 *.db
-uploads/originals/
-uploads/*.webp
-uploads/*.jpg
-uploads/*.png
-uploads/*.jpeg
-uploads/*.gif
+uploads/
+!uploads/.gitkeep
 __pycache__/
 *.pyc
 *.pyo

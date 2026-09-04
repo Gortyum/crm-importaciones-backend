@@ -151,7 +151,7 @@ def cambiar_estado(cotizacion_id: int, data: CotizacionUpdateEstado, db: Session
 
 
 @router.post("/{cotizacion_id}/crear-importacion")
-def crear_importacion_desde_cot(cotizacion_id: int, db: Session = Depends(get_db)):
+async def crear_importacion_desde_cot(cotizacion_id: int, db: Session = Depends(get_db)):
     from app.routers.importaciones import (
         generar_correlativo as gen_imp,
         _guardar_calculos,
@@ -160,6 +160,7 @@ def crear_importacion_desde_cot(cotizacion_id: int, db: Session = Depends(get_db
         ImportacionItem,
     )
     from app.schemas.importacion import ImportacionCreate, ImportacionItemCreate
+    from app.services.divisa import obtener_tipo_cambio
 
     cot = db.query(Cotizacion).get(cotizacion_id)
     if not cot:
@@ -178,8 +179,33 @@ def crear_importacion_desde_cot(cotizacion_id: int, db: Session = Depends(get_db
         )
         for item in cot.items
     ]
+
+    # Tipo de cambio USD->CLP: si la cotización está en USD se respeta el tipo de
+    # cambio definido por el usuario; en otro caso se usa la tasa de mercado real.
+    tasas = await obtener_tipo_cambio()
+    if cot.divisa_original.upper() == "USD" and cot.tipo_cambio > 0:
+        tc_usd_clp = cot.tipo_cambio
+    else:
+        tc_usd_clp = tasas.get("USD") or cot.tipo_cambio or 950.0
+
+    # Tasa BRL->USD (USD por 1 BRL) derivada del mercado cuando sea coherente;
+    # si la relación es irreal se conserva 0.18 como respaldo.
+    tc_brl_usd = 0.18
+    usd_clp = tasas.get("USD")
+    brl_clp = tasas.get("BRL")
+    if usd_clp and brl_clp:
+        derivada = round(brl_clp / usd_clp, 4)
+        if 0.05 < derivada < 1.0:
+            tc_brl_usd = derivada
+
+    # Vía de transporte: la más usada entre los items de la cotización.
+    modos = [i.tipo_flete for i in cot.items if i.tipo_flete]
+    transporte = max(set(modos), key=modos.count) if modos else "Aereo"
+
     data = ImportacionCreate(
-        transporte="Aereo",
+        transporte=transporte,
+        tc_usd_clp=tc_usd_clp,
+        tc_brl_usd=tc_brl_usd,
         items=items,
         notas=f"Generada desde cotización {cot.correlativo}",
     )
@@ -188,8 +214,8 @@ def crear_importacion_desde_cot(cotizacion_id: int, db: Session = Depends(get_db
         correlativo=gen_imp(db),
         transporte=data.transporte,
         cert_origen=True,
-        tc_usd_clp=920.0,
-        tc_brl_usd=0.18,
+        tc_usd_clp=data.tc_usd_clp,
+        tc_brl_usd=data.tc_brl_usd,
         contingencia_pct=2,
         notas=data.notas,
         cotizacion_id=cotizacion_id,

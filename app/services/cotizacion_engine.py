@@ -36,7 +36,9 @@ def calcular_item(item: ItemCotizacionCreate) -> dict:
     flete = calcular_costo_flete(item, item.tipo_cambio)
     envio = item.costo_envio
 
-    subtotal_base = (costo_clp + flete + envio) * item.cantidad
+    # El flete es el costo TOTAL de transporte del lote de ese item (no por unidad),
+    # por lo que se suma una sola vez, fuera de la multiplicacion por cantidad.
+    subtotal_base = (costo_clp + envio) * item.cantidad + flete
     con_margen = subtotal_base * (1 + item.margen_pct / 100)
     con_descuento = con_margen * (1 - item.descuento_pct / 100)
 
