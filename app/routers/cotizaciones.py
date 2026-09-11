@@ -13,6 +13,7 @@ from app.schemas.cotizacion import (
     CotizacionUpdateEstado,
     CotizacionPDFData,
     ItemCotizacionPDF,
+    CotizacionImportacion,
 )
 from app.services.cotizacion_engine import calcular_item
 
@@ -70,7 +71,7 @@ def obtener_cotizacion(cotizacion_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/", response_model=CotizacionOut, status_code=201)
-def crear_cotizacion(data: CotizacionCreate, db: Session = Depends(get_db)):
+async def crear_cotizacion(data: CotizacionCreate, db: Session = Depends(get_db)):
     cliente = db.query(Cliente).get(data.cliente_id)
     if not cliente:
         raise HTTPException(400, "Cliente no encontrado")
@@ -121,6 +122,10 @@ def crear_cotizacion(data: CotizacionCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(cot)
 
+    if data.importacion:
+        await _crear_importacion_desde_cotizacion(db, cot, data.importacion)
+        db.refresh(cot)
+
     return _completar_out(cot, db)
 
 
@@ -150,23 +155,25 @@ def cambiar_estado(cotizacion_id: int, data: CotizacionUpdateEstado, db: Session
     return _completar_out(cot, db)
 
 
-@router.post("/{cotizacion_id}/crear-importacion")
-async def crear_importacion_desde_cot(cotizacion_id: int, db: Session = Depends(get_db)):
+async def _crear_importacion_desde_cotizacion(
+    db: Session,
+    cot: Cotizacion,
+    importacion_data: CotizacionImportacion | None = None,
+) -> Importacion:
+    """Crea y vincula una importación de costeo a partir de los items de la cotización."""
     from app.routers.importaciones import (
         generar_correlativo as gen_imp,
         _guardar_calculos,
         _serializar,
         Importacion,
         ImportacionItem,
+        ImportacionCosto,
+        ImportacionProveedor,
     )
-    from app.schemas.importacion import ImportacionCreate, ImportacionItemCreate
+    from app.schemas.importacion import ImportacionItemCreate
     from app.services.divisa import obtener_tipo_cambio
 
-    cot = db.query(Cotizacion).get(cotizacion_id)
-    if not cot:
-        raise HTTPException(404, "Cotización no encontrada")
-    if cot.importacion_id:
-        raise HTTPException(400, "Esta cotización ya está vinculada a una importación")
+    importacion_data = importacion_data or CotizacionImportacion()
 
     items = [
         ImportacionItemCreate(
@@ -182,55 +189,54 @@ async def crear_importacion_desde_cot(cotizacion_id: int, db: Session = Depends(
 
     # Tipo de cambio USD->CLP: si la cotización está en USD se respeta el tipo de
     # cambio definido por el usuario; en otro caso se usa la tasa de mercado real.
-    tasas = await obtener_tipo_cambio()
-    if cot.divisa_original.upper() == "USD" and cot.tipo_cambio > 0:
-        tc_usd_clp = cot.tipo_cambio
+    if importacion_data.tc_usd_clp and importacion_data.tc_usd_clp > 0:
+        tc_usd_clp = importacion_data.tc_usd_clp
     else:
-        tc_usd_clp = tasas.get("USD") or cot.tipo_cambio or 950.0
+        tasas = await obtener_tipo_cambio()
+        if cot.divisa_original.upper() == "USD" and cot.tipo_cambio > 0:
+            tc_usd_clp = cot.tipo_cambio
+        else:
+            tc_usd_clp = tasas.get("USD") or cot.tipo_cambio or 950.0
 
-    # Tasa BRL->USD (USD por 1 BRL) derivada del mercado cuando sea coherente;
-    # si la relación es irreal se conserva 0.18 como respaldo.
-    tc_brl_usd = 0.18
-    usd_clp = tasas.get("USD")
-    brl_clp = tasas.get("BRL")
-    if usd_clp and brl_clp:
-        derivada = round(brl_clp / usd_clp, 4)
-        if 0.05 < derivada < 1.0:
-            tc_brl_usd = derivada
-
-    # Vía de transporte: la más usada entre los items de la cotización.
-    modos = [i.tipo_flete for i in cot.items if i.tipo_flete]
-    transporte = max(set(modos), key=modos.count) if modos else "Aereo"
-
-    data = ImportacionCreate(
-        transporte=transporte,
-        tc_usd_clp=tc_usd_clp,
-        tc_brl_usd=tc_brl_usd,
-        items=items,
-        notas=f"Generada desde cotización {cot.correlativo}",
-    )
+    tc_brl_usd = importacion_data.tc_brl_usd if importacion_data.tc_brl_usd else 0.18
 
     desde = Importacion(
         correlativo=gen_imp(db),
-        transporte=data.transporte,
-        cert_origen=True,
-        tc_usd_clp=data.tc_usd_clp,
-        tc_brl_usd=data.tc_brl_usd,
-        contingencia_pct=2,
-        notas=data.notas,
-        cotizacion_id=cotizacion_id,
+        transporte=importacion_data.transporte or "Aereo",
+        cert_origen=importacion_data.cert_origen,
+        tc_usd_clp=tc_usd_clp,
+        tc_brl_usd=tc_brl_usd,
+        contingencia_pct=importacion_data.contingencia_pct,
+        notas=f"Generada desde cotización {cot.correlativo}",
+        cotizacion_id=cot.id,
         estado="Borrador",
         historial_estados=[{"estado": "Borrador", "fecha": datetime.now().isoformat()}],
     )
     db.add(desde)
     db.flush()
-    for it in data.items:
+    for it in items:
         db.add(ImportacionItem(importacion_id=desde.id, **it.model_dump()))
+    for c in importacion_data.costos:
+        db.add(ImportacionCosto(importacion_id=desde.id, **c.model_dump()))
+    proveedor_ids = {it.proveedor_id for it in cot.items if it.proveedor_id}
+    for pid in proveedor_ids:
+        db.add(ImportacionProveedor(importacion_id=desde.id, proveedor_id=pid))
     cot.importacion_id = desde.id
     db.commit()
     db.refresh(desde)
     _guardar_calculos(desde, db)
     return _serializar(desde, db)
+
+
+@router.post("/{cotizacion_id}/crear-importacion")
+async def crear_importacion_desde_cot(cotizacion_id: int, db: Session = Depends(get_db)):
+    cot = db.query(Cotizacion).get(cotizacion_id)
+    if not cot:
+        raise HTTPException(404, "Cotización no encontrada")
+    if cot.importacion_id:
+        raise HTTPException(400, "Esta cotización ya está vinculada a una importación")
+
+    return await _crear_importacion_desde_cotizacion(db, cot)
 
 
 @router.get("/{cotizacion_id}/pdf-data", response_model=CotizacionPDFData)

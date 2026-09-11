@@ -49,6 +49,25 @@ class ItemCotizacionPDF(BaseModel):
     total: float
 
 
+class ImportacionCostoCotizacion(BaseModel):
+    proveedor_id: int | None = None
+    categoria: str = "otro"
+    tipo_costo: str = "otro"
+    monto: float = 0
+    divisa: str = "USD"
+    notas: str = ""
+
+
+class CotizacionImportacion(BaseModel):
+    """Datos de la importación que se desea crear junto con la cotización."""
+    transporte: str = "Aereo"
+    cert_origen: bool = True
+    tc_usd_clp: float | None = None
+    tc_brl_usd: float = 0.18
+    contingencia_pct: float = 2
+    costos: list[ImportacionCostoCotizacion] = []
+
+
 class CotizacionBase(BaseModel):
     cliente_id: int
     contacto_id: int | None = None
@@ -60,6 +79,7 @@ class CotizacionBase(BaseModel):
 
 class CotizacionCreate(CotizacionBase):
     items: list[ItemCotizacionCreate] = []
+    importacion: CotizacionImportacion | None = None
 
 
 class CotizacionUpdateEstado(BaseModel):

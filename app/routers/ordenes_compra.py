@@ -88,17 +88,18 @@ def crear_desde_cotizacion(data: OrdenCompraCreate, db: Session = Depends(get_db
     db.flush()
 
     for item_cot in items_cot:
-        costo_unit = item_cot.costo_original * cot.tipo_cambio
-        subtotal = costo_unit * item_cot.cantidad
+        costo_unit = item_cot.costo_original
+        divisa_item = item_cot.divisa_origen or "USD"
+        subtotal = round(costo_unit * item_cot.cantidad, 2)
         item = ItemOrdenCompra(
             orden_id=oc.id,
             producto_id=item_cot.producto_id,
             descripcion=item_cot.descripcion,
             cantidad=item_cot.cantidad,
-            costo_unitario=round(costo_unit, 0),
-            divisa="CLP",
+            costo_unitario=round(costo_unit, 2),
+            divisa=divisa_item,
             tipo_personalizacion=item_cot.tipo_personalizacion,
-            subtotal=round(subtotal, 0),
+            subtotal=subtotal,
         )
         db.add(item)
 
