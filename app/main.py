@@ -21,6 +21,7 @@ from app.routers import (
     importaciones,
     config,
     upload,
+    archivos,
     auth,
 )
 from app.routers.auth import requiere_autenticacion
@@ -56,6 +57,7 @@ app.include_router(divisas.router, dependencies=[Depends(requiere_autenticacion)
 app.include_router(importaciones.router, dependencies=[Depends(requiere_autenticacion)])
 app.include_router(config.router, dependencies=[Depends(requiere_autenticacion)])
 app.include_router(upload.router, dependencies=[Depends(requiere_autenticacion)])
+app.include_router(archivos.router, dependencies=[Depends(requiere_autenticacion)])
 
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
