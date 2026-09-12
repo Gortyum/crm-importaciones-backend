@@ -1,3 +1,4 @@
+import hashlib
 import re
 import uuid
 from pathlib import PurePath
@@ -126,9 +127,18 @@ async def subir_archivo(
     carpeta = CARPETAS[entidad_tipo]
     object_key = f"{carpeta}/{uuid.uuid4().hex}.{ext}"
 
+    # Dedup global por contenido: si el hash ya existe, se reutiliza el objeto
+    # físico en R2 (una sola copia) y solo se crea una referencia nueva.
+    file_hash = hashlib.sha256(contenido).hexdigest()
+    existente = db.query(Archivo).filter(Archivo.hash_sha256 == file_hash).first()
+    duplicado = existente is not None
+    if duplicado:
+        object_key = existente.object_key
+
     archivo = Archivo(
         nombre_original=nombre_original,
         object_key=object_key,
+        hash_sha256=file_hash,
         carpeta=carpeta,
         entidad_tipo=entidad_tipo,
         entidad_id=entidad_id,
@@ -141,7 +151,8 @@ async def subir_archivo(
 
     storage = _storage_o_503()
     try:
-        storage.subir(object_key, contenido, mime)
+        if not duplicado:
+            storage.subir(object_key, contenido, mime)
     except (R2NoConfigurado, Exception) as exc:
         db.rollback()
         raise HTTPException(502, f"Error subiendo a R2: {type(exc).__name__}")
@@ -160,6 +171,7 @@ async def subir_archivo(
         tamano=archivo.tamano,
         es_publico=archivo.es_publico,
         url=storage.url_publica(object_key) if es_publico else storage.url_firmada(object_key),
+        duplicado=duplicado,
     )
 
 
@@ -212,12 +224,19 @@ def eliminar_archivo(
     archivo = db.query(Archivo).get(archivo_id)
     if not archivo:
         raise HTTPException(404, "Archivo no encontrado")
-    storage = _storage_o_503()
-    try:
-        storage.eliminar(archivo.object_key)
-    except Exception:
-        db.delete(archivo)
-        db.commit()
-        raise HTTPException(502, "No se pudo eliminar el archivo en R2")
+
+    otras_referencias = (
+        db.query(Archivo).filter(Archivo.object_key == archivo.object_key, Archivo.id != archivo.id).count()
+    )
+    if otras_referencias == 0:
+        # Última referencia al objeto: se elimina físicamente de R2.
+        storage = _storage_o_503()
+        try:
+            storage.eliminar(archivo.object_key)
+        except Exception:
+            db.delete(archivo)
+            db.commit()
+            raise HTTPException(502, "No se pudo eliminar el archivo en R2")
+
     db.delete(archivo)
     db.commit()

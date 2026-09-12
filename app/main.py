@@ -95,6 +95,26 @@ def _migrar_columnas():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE usuarios ADD COLUMN rol VARCHAR(30) DEFAULT 'admin'"))
                 conn.execute(text("UPDATE usuarios SET rol = 'admin' WHERE rol IS NULL"))
+    if "archivos" in insp.get_table_names():
+        columnas = {c["name"] for c in insp.get_columns("archivos")}
+        if "hash_sha256" not in columnas:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE archivos ADD COLUMN hash_sha256 VARCHAR(64)"))
+        if engine.dialect.name == "sqlite":
+            # SQLite no permite eliminar índices UNIQUE de constraints; si la tabla
+            # está vacía (dev), se reconstruye sin el unique para habilitar el dedup.
+            with engine.connect() as conn:
+                count = conn.execute(text("SELECT COUNT(*) FROM archivos")).scalar()
+            if count == 0:
+                with engine.begin() as conn:
+                    conn.execute(text("DROP TABLE archivos"))
+                from app.models.archivo import Archivo  # noqa: F401
+
+                Archivo.__table__.create(bind=engine, checkfirst=True)
+        else:
+            with engine.begin() as conn:
+                conn.execute(text("DROP INDEX IF EXISTS ix_archivos_object_key"))
+                conn.execute(text("ALTER TABLE archivos DROP CONSTRAINT IF EXISTS archivos_object_key_key"))
 
 
 @app.get("/api/health")

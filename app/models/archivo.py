@@ -16,7 +16,8 @@ class Archivo(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     nombre_original: Mapped[str] = mapped_column(String(255), nullable=False)
-    object_key: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
+    object_key: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+    hash_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     carpeta: Mapped[str] = mapped_column(String(50), nullable=False)
     entidad_tipo: Mapped[str] = mapped_column(String(50), nullable=False)
     entidad_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)

@@ -31,3 +31,4 @@ class ArchivoUploadResult(BaseModel):
     tamano: int
     es_publico: bool
     url: str | None = None
+    duplicado: bool = False
