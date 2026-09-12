@@ -87,6 +87,12 @@ def _migrar_columnas():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE items_cotizacion ADD COLUMN tipo_cambio FLOAT DEFAULT 1.0"))
                 conn.execute(text("UPDATE items_cotizacion SET tipo_cambio = 1.0 WHERE tipo_cambio IS NULL"))
+    if "usuarios" in insp.get_table_names():
+        columnas = {c["name"] for c in insp.get_columns("usuarios")}
+        if "rol" not in columnas:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE usuarios ADD COLUMN rol VARCHAR(30) DEFAULT 'admin'"))
+                conn.execute(text("UPDATE usuarios SET rol = 'admin' WHERE rol IS NULL"))
 
 
 @app.get("/api/health")

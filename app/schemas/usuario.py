@@ -10,11 +10,13 @@ class TokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
     username: str
+    referencias: dict | None = None
 
 
 class UsuarioOut(BaseModel):
     id: int
     username: str
+    rol: str
 
     model_config = {"from_attributes": True}
 

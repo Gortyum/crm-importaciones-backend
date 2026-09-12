@@ -4,17 +4,28 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.usuario import Usuario
-from app.schemas.usuario import UsuarioLogin, TokenOut, CambioPassword, UsuarioRegistro
+from app.schemas.usuario import (
+    UsuarioLogin,
+    TokenOut,
+    CambioPassword,
+    UsuarioRegistro,
+    UsuarioOut,
+)
 from app.services.auth_service import (
     hash_password,
     verify_password,
     crear_token,
     decodificar_token,
 )
+from app.services.cache import cache_get, cache_set
+from app.services.referencias import construir_referencias
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 security = HTTPBearer(auto_error=False)
+
+REFERENCIAS_KEY_PREFIX = "crm:referencias:"
+REFERENCIAS_TTL = 600
 
 
 def requiere_autenticacion(
@@ -48,12 +59,27 @@ def obtener_usuario_actual(
     return usuario
 
 
+async def referencias_para_usuario(db: Session, usuario: Usuario) -> dict:
+    """Referencias del usuario, servidas desde caché (Redis o memoria)."""
+    key = REFERENCIAS_KEY_PREFIX + usuario.username
+    data = cache_get(key)
+    if data is None:
+        data = await construir_referencias(db, usuario)
+        cache_set(key, data, ttl=REFERENCIAS_TTL)
+    return data
+
+
 @router.post("/login", response_model=TokenOut)
-def login(data: UsuarioLogin, db: Session = Depends(get_db)):
+async def login(data: UsuarioLogin, db: Session = Depends(get_db)):
     usuario = db.query(Usuario).filter(Usuario.username == data.username).first()
     if not usuario or not verify_password(data.password, usuario.password_hash):
         raise HTTPException(status_code=401, detail="Usuario o contraseña incorrectos")
-    return TokenOut(access_token=crear_token(usuario.username), username=usuario.username)
+    referencias = await referencias_para_usuario(db, usuario)
+    return TokenOut(
+        access_token=crear_token(usuario.username),
+        username=usuario.username,
+        referencias=referencias,
+    )
 
 
 @router.post("/register", response_model=TokenOut)
@@ -72,9 +98,17 @@ def registrar(data: UsuarioRegistro, db: Session = Depends(get_db)):
     return TokenOut(access_token=crear_token(usuario.username), username=usuario.username)
 
 
-@router.get("/me", response_model=None)
+@router.get("/me", response_model=UsuarioOut)
 def obtener_me(usuario: Usuario = Depends(obtener_usuario_actual)):
-    return {"id": usuario.id, "username": usuario.username}
+    return usuario
+
+
+@router.get("/referencias")
+async def obtener_referencias(
+    usuario: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+):
+    return await referencias_para_usuario(db, usuario)
 
 
 @router.post("/cambiar-password")
