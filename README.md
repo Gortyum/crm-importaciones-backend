@@ -1,82 +1,288 @@
-# CRM Importaciones - Backend
+# CRM Eleni Sourcing — Backend (API REST)
 
-API para gestionar cotizaciones de productos importados. Hecha con FastAPI, SQLAlchemy y SQLite.
+Backend para el CRM de **Eleni Sourcing · Importaciones**. Expone una API REST usada por el
+frontend React (`crm-importaciones-frontend`) para gestionar clientes, proveedores, productos,
+**cotizaciones**, **importaciones** y **órdenes de compra** de mercancía entre Brasil y Chile.
 
-## Qué hace
+---
 
-- **Catálogos**: clientes (con contactos), proveedores, productos
-- **Cotizaciones**: calcula costos desde el precio de origen (USD/BRL/CLP) hasta precio de venta final con flete, margen, descuento e IVA
-- **Imágenes**: sube fotos de productos, el backend las procesa automáticamente (quita fondo con rembg, recorta, ajusta brillo/contraste, comprime a WebP)
-- **Órdenes de compra**: genera OC por proveedor desde una cotización
-- **Divisas**: tipo de cambio en tiempo real desde mindicador.cl
+## 1. Stack
 
-## Requisitos
+- **Python 3.11** · **FastAPI** · Uvicorn
+- **SQLAlchemy** (ORM) + **SQLite** en desarrollo / **PostgreSQL** en producción (Railway)
+- **PyJWT** para autenticación (Bearer token)
+- **Redis** opcional como caché de referencias (con **fallback en memoria**)
+- **Pillow** para procesamiento de imágenes
+- **boto3** para el bucket **Cloudflare R2** (archivos adjuntos)
 
-- Python 3.11+
-- pip
+## 2. Estructura del proyecto
 
-## Setup
-
-```bash
-cp .env.example .env
-pip install -r requirements.txt
-python -m app.seed   # carga datos de ejemplo (3 clientes, 3 proveedores, 8 productos)
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+app/
+├── main.py                 # App, CORS, routers, migraciones idempotentes
+├── security.py             # JWT (hash de contraseñas, token, dependencia de autenticación)
+├── database.py             # engine, SessionLocal, Base
+├── models/
+│   ├── usuario.py          # usuarios (username, password_hash, rol)
+│   ├── cliente.py          # clientes + contactos_clientes
+│   ├── proveedor.py        # proveedores + proveedor_categorias
+│   ├── producto.py         # productos
+│   ├── cotizacion.py       # cotizaciones + items_cotizacion
+│   ├── importacion.py      # importaciones + items_importacion + costos_importacion
+│   ├── orden_compra.py     # ordenes_compra + items_orden_compra
+│   ├── configuracion.py    # parametros globales (IVA, aranceles)
+│   ├── archivo.py          # metadatos de archivos en R2 (tabla archivos)
+│   └── enums.py            # estados y tipos (Divisa, TipoFlete, TipoPersonalizacion, ...)
+├── routers/                # Endpoints por recurso (ver sección 7)
+├── schemas/                # Pydantic (request/response)
+└── services/
+    ├── cotizacion_engine.py    # cálculo de cotización (flete, margen, IVA)
+    ├── importacion_engine.py   # cálculo de importación (FOB → CIF → landed cost)
+    ├── divisa.py               # tipo de cambio (mindicador.cl + open.er-api.com)
+    ├── config_service.py       # lectura de configuración global
+    ├── referencias.py          # catálogos, estados y TC devueltos al iniciar sesión
+    ├── cache.py                # Redis con fallback en memoria
+    ├── image_processor.py      # pipeline de imágenes (EXIF, ajustes, resize → WebP)
+    ├── storage.py              # cliente Cloudflare R2 (S3-compatible)
+    ├── pdf_data.py             # datos estructurados para generar PDF del lado React
+    └── referencias.py          # referencias del login
 ```
 
-La API queda en `http://localhost:8000`. La documentación interactiva en `http://localhost:8000/docs`.
+## 3. Puesta en marcha (desarrollo local)
 
-## Variables de entorno
+```bash
+# 1. Crear entorno virtual
+python -m venv venv
+venv\Scripts\activate            # Windows
+# source venv/bin/activate      # Linux/macOS
+
+# 2. Instalar dependencias
+pip install -r requirements.txt
+
+# 3. Variables de entorno (copiar y completar)
+copy .env.example .env          # Windows
+# cp .env.example .env          # Linux/macOS
+
+# 4. Levantar el servidor
+python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+- Documentación interactiva: `http://localhost:8000/docs`
+- Health check: `http://localhost:8000/api/health`
+- Al arrancar se crean las tablas, se siembra el usuario **admin / admin123** (si no existe)
+  y se inserta la configuración por defecto.
+
+## 4. Variables de entorno
 
 | Variable | Descripción | Default |
 |---|---|---|
-| `DATABASE_URL` | URL de conexión a la base de datos | `sqlite:///./crm_erp.db` |
-| `UPLOAD_DIR` | Directorio donde se guardan las imágenes | `uploads` |
+| `DATABASE_URL` | Conexión a la base de datos | `sqlite:///./crm_erp.db` |
+| `SECRET_KEY` | Clave para firmar JWT | `secret-key-cambiar-en-produccion` |
+| `UPLOAD_DIR` | Directorio de imágenes (fallback local) | `uploads` |
 | `ALLOWED_ORIGINS` | Orígenes permitidos por CORS (separados por coma) | `http://localhost:5173` |
-| `HOST` | Host del servidor | `0.0.0.0` |
-| `PORT` | Puerto del servidor | `8000` |
+| `REDIS_URL` | Caché de referencias (opcional; si falla usa memoria) | — |
+| `HOST` / `PORT` | Host y puerto del server | `0.0.0.0` / `8000` |
+| `R2_ACCOUNT_ID` | ID de cuenta Cloudflare (R2) | — |
+| `R2_ACCESS_KEY_ID` | Token R2 (Access Key ID) | — |
+| `R2_SECRET_ACCESS_KEY` | Token R2 (Secret Access Key) | — |
+| `R2_BUCKET_NAME` | Nombre del bucket R2 | — |
+| `R2_ENDPOINT` | URL S3-compatible (default: `https://<account>.r2.cloudflarestorage.com`) | — |
+| `R2_PUBLIC_URL` | URL pública del bucket (imágenes públicas de productos) | — |
 
-> En producción, `ALLOWED_ORIGINS` debe listar el origin del frontend (donde corre
-> React), p. ej. `http://localhost:5173,https://crm-importaciones-frontend-pi.vercel.app`.
-> El backend NO debe ir en esa lista (es el que recibe las peticiones, no el que las origina).
+### CORS
 
-Para PostgreSQL, cambia `DATABASE_URL`:
+`ALLOWED_ORIGINS` debe listar el/los **origin del frontend** (donde corre React), no el del backend:
+
 ```
-DATABASE_URL=postgresql://usuario:password@localhost:5432/nombre_db
+ALLOWED_ORIGINS=http://localhost:5173,https://crm-importaciones-frontend-pi.vercel.app
 ```
 
-## Almacenamiento de archivos (Cloudflare R2)
+Sin esas variables R2, los endpoints `/api/archivos/*` responden `503` con un mensaje claro y el
+flujo local (`/api/upload/` + `/uploads`) sigue operando para desarrollo.
 
-Archivos e imágenes se guardan en un bucket de **Cloudflare R2** (API compatible con S3).
-PostgreSQL solo guarda metadatos (tabla `archivos`); nunca el contenido.
+## 5. Autenticación y referencias
 
-### Variables de entorno
+- **Login**: `POST /api/auth/login` → devuelve `access_token`, `username` y las **referencias**.
+- **Registro temporal**: `POST /api/auth/register` (permite crear el primer administrador; se puede
+  desactivar con `REGISTER_ENABLED=false` — el .env.example la menciona como opcional).
+- `GET /api/auth/me` → datos del usuario autenticado.
+- `GET /api/auth/referencias` → catálogos y constantes del negocio:
+
+| Campo | Contenido |
+|---|---|
+| `usuario` / `permisos` | Usuario actual y módulos autorizados por rol |
+| `monedas` | Tipo de cambio del día (USD, EUR, BRL, CLP=1) |
+| `tc_cotizacion` | TC con el % de contingencia aplicado, para cotizar |
+| `seguridad_pct` | % de contingencia configurado |
+| `config` | `iva_chile`, `arancel_general`, `arancel_mercosur` |
+| `estados` | Estados y transiciones de cotización, importación y OC |
+| `categorias_productos` | Categorías de proveedores (catálogo) |
+| `fecha_tc` | Fecha de los tipos de cambio |
+
+Las referencias se cachean vía `app/services/cache.py` (Redis si `REDIS_URL` existe, con fallback
+en memoria); el TTl es corto para que el tipo de cambio no quede viejo.
+
+## 6. Base de datos y migraciones
+
+**SQLite** (dev): archivo `crm_erp.db` en la raíz. **PostgreSQL** (prod): controlado por `DATABASE_URL`.
+
+Tablas principales:
+
+- `usuarios`
+- `clientes` + `contactos_clientes`
+- `proveedores` + `proveedor_categorias`
+- `productos`
+- `cotizaciones` + `items_cotizacion`
+- `importaciones` + `items_importacion` + `costos_importacion`
+- `ordenes_compra` + `items_orden_compra`
+- `configuracion`
+- `archivos`
+
+**Migraciones**: se ejecutan automáticamente en `app/main.py` al arrancar y son idempotentes
+(`_migrar_columnas`):
+
+- Añade `tipo_cambio` a `items_cotizacion` (si no existe).
+- Añade `rol` a `usuarios` (si no existe).
+- Añade `hash_sha256` a `archivos` (si no existe).
+- Elimina la **restricción UNIQUE** de `object_key` en `archivos` (SQLite: reconstruye la tabla solo
+  si está vacía; PostgreSQL: `DROP INDEX` / `DROP CONSTRAINT` ignorando errores) — necesaria para
+  permitir **dedup**: varias referencias pueden apuntar al mismo archivo físico.
+
+## 7. Endpoints
+
+| Área | Método | Ruta |
+|---|---|---|
+| Salud | GET | `/api/health` |
+| Auth | POST | `/api/auth/login` |
+| Auth | POST | `/api/auth/register` (temporal) |
+| Auth | GET | `/api/auth/me`, `/api/auth/referencias` |
+| Auth | PUT | `/api/auth/cambiar-password` |
+| Config | GET/PUT | `/api/config/` (IVA, aranceles, contingencia) |
+| Clientes | CRUD | `/api/clientes/` + `/api/clientes/{id}/contactos/` |
+| Proveedores | CRUD | `/api/proveedores/` |
+| Categorías | CRUD | `/api/proveedor-categorias/` |
+| Productos | CRUD | `/api/productos/` |
+| Cotizaciones | CRUD | `/api/cotizaciones/` |
+| Cotizaciones | PATCH | `/api/cotizaciones/{id}/estado` |
+| Cotizaciones | POST | `/api/cotizaciones/{id}/crear-importacion` |
+| Cotizaciones | GET | `/api/cotizaciones/{id}/pdf-data` |
+| Importaciones | CRUD | `/api/importaciones/` |
+| Importaciones | PATCH | `/api/importaciones/{id}/estado` |
+| Importaciones | POST | `/api/importaciones/{id}/pasar-a-cotizacion` |
+| Importaciones | POST | `/api/importaciones/{id}/calcular` (preview) |
+| OCs | CRUD | `/api/ordenes-compra/` |
+| OCs | PATCH | `/api/ordenes-compra/{id}/estado` |
+| OCs | GET | `/api/ordenes-compra/{id}/pdf-data` |
+| Divisas | GET | `/api/divisas/cambio` |
+| Imágenes | POST | `/api/upload/` (fallback local) |
+| Archivos | POST | `/api/archivos/upload` |
+| Archivos | GET | `/api/archivos/?entidad_tipo=&entidad_id=` |
+| Archivos | GET | `/api/archivos/{id}`, `/api/archivos/{id}/descargar` |
+| Archivos | DELETE | `/api/archivos/{id}` |
+
+Todas las rutas de negocio requieren header `Authorization: Bearer <token>`.
+
+## 8. Estados y transiciones
+
+**Cotización**: `Creada → Enviada → Cerrada → En Produccion → Entregada` (+ `Cancelada` desde
+Creada/Enviada/Cerrada/En Produccion).
+
+**Importación**: `Borrador → En Transito → En Bodega → Cerrada` (+ `Cancelada` desde las tres
+primeras).
+
+**Orden de compra**: `Pendiente → Confirmada → En Produccion → Recibida` (+ `Cancelada`).
+
+## 9. Cálculos de negocio
+
+### Cotización (`cotizacion_engine.py`)
+
+- El **tipo de cambio** vive en cada item (`tipo_cambio`) y corresponde a su divisa de origen
+  (cuántos CLP vale 1 unidad; `1.0` si la divisa es CLP).
+- **Flete**: si `costo_flete` manual > 0 se usa tal cual (CLP); si no, se estima por tarifa por kg
+  o por m³ según tipo de transporte (Aéreo/Terrestre/Marítimo) y se usa el mayor:
+
+  | Transporte | Tarifa por kg | Tarifa por m³ |
+  |---|---|---|
+  | Aéreo | $4.500 | $35.000 |
+  | Terrestre | $1.800 | $12.000 |
+  | Marítimo | $900 | $5.000 |
+
+- El flete es el costo **total del lote** (no por unidad): se suma una sola vez.
+- `subtotal = (costo + envío) × cantidad + flete` → se aplica margen → se aplica descuento →
+  IVA → total. El precio unitario = total neto ÷ cantidad.
+- Se guarda también `tipo_cambio` en el item para que el PDF y el detalle reproduzcan el cálculo.
+
+### Importación (`importacion_engine.py`)
+
+Modelo **FOB → CIF → arancel → contingencia → landed cost → precio de venta**:
+
+1. Cada item: precio de fábrica convertido a USD → `fob` = precio × cantidad.
+2. Costos según transporte (Courier / Aéreo / Terrestre): flete internacional, seguro, gastos de
+   despacho, honorarios de agente y flete local, cada uno en su divisa.
+3. `cif = fob + flete + seguro`; **arancel** sobre CIF (6% general, 0% Mercosur con certificado de
+   origen).
+4. **Contingencia** (% configurado) sobre `cif + gastos extranjeros no CIF`.
+5. **IVA de importación** sobre `(cif + arancel)`.
+6. `costo_almacén` (CLP) repartido entre items proporcional al FOB → cada item obtiene
+   `costo_unitario_neto`, y con el margen se calcula `precio_venta` (neto + IVA).
+
+### Divisas (`divisa.py`)
+
+- Consulta **mindicador.cl** (USD y EUR frente al CLP) y **open.er-api.com** (`https://open.er-api.com/v6/latest/USD`,
+  tasa BRL/USD) en paralelo con `asyncio.gather`.
+- `BRL → CLP` = `USD/CLP ÷ BRL/USD`.
+- Fallbacks en cadena: EUR/6.05 si falta BRL; y un fallback global `{USD: 950, EUR: 1025, BRL: 180}`
+  si la API externa no responde (para que app nunca falle por el mercado).
+- Nota: el endpoint `mindicador.cl/api/real` **no existe** («No se ha encontrado el indicador
+  económico»); el real no se consulta.
+
+## 10. Imágenes y archivos
+
+### Pipeline local (fallback) — `/api/upload/`
+
+Subida multipart → se valida/tipo de imagen → debe almacenarse en `UPLOAD_DIR` y se reemplaza el
+tipo: si no coincide se elimina y devuelve error. Sirve la imagen en `/uploads/{archivo}`.
+En producción el almacenamiento primario es Cloudflare R2; `/api/upload/` queda como respaldo.
+
+### Cloudflare R2 — `/api/archivos/*`
 
 | Variable | Descripción | Obligatoria |
 |---|---|---|
-| `R2_ACCOUNT_ID` | ID de cuenta de Cloudflare | Sí (para armar el endpoint por defecto) |
-| `R2_ACCESS_KEY_ID` | Token R2 (Access Key ID) | Sí |
-| `R2_SECRET_ACCESS_KEY` | Token R2 (Secret Access Key) | Sí |
+| `R2_ACCOUNT_ID` | ID de cuenta de Cloudflare | Sí (para el endpoint por defecto) |
+| `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | Token con permiso **Object Read & Write** | Sí |
 | `R2_BUCKET_NAME` | Nombre del bucket | Sí |
-| `R2_ENDPOINT` | URL S3-compatible (default: `https://<account>.r2.cloudflarestorage.com`) | No |
-| `R2_PUBLIC_URL` | URL pública del bucket para archivos públicos (imágenes de productos) | No |
+| `R2_ENDPOINT` | URL S3-compatible | No |
+| `R2_PUBLIC_URL` | URL pública del bucket | No |
 
-Sin estas variables, `/api/archivos/*` responde `503` con mensaje claro y el flujo local
-(`/api/upload/` + `/uploads`) sigue operando para desarrollo.
-
-### Configuración en Cloudflare
+**Pasos en Cloudflare**:
 
 1. Crear el bucket (nombre = `R2_BUCKET_NAME`).
-2. Crear un **token de API** en R2 con permiso **Object Read & Write**; copiar Access Key ID
-   y Secret Access Key.
-3. (Opcional) Vincular un dominio personalizado o activar el acceso público del bucket y usar
-   esa URL como `R2_PUBLIC_URL`. Sin dominio público, las imágenes se sirven igual por URL firmada.
+2. R2 → **Administrar tokens de API del bucket** → Crear token → **Object Read & Write**.
+3. (Opcional) Dominio personalizado o acceso público para `R2_PUBLIC_URL`.
 
-### CORS del bucket (necesario para el PDF)
+**Organización** (carpetas por entidad): `productos/`, `cotizaciones/`, `ordenes-compra/`,
+`proveedores/`, `documentos/`.
 
-El PDF se genera en el navegador con `html2canvas`, que hace `fetch` de las imágenes → el bucket
-debe permitir `GET` desde el origin del frontend. En Cloudflare → R2 → bucket → **Settings →
-CORS Policy**, agrega:
+- Las **imágenes de productos** son públicas (se muestran directo desde React y entran al PDF).
+- Los **documentos** son privados: se descargan con **URL firmada** (`GET /api/archivos/{id}/descargar`),
+  que valida el JWT y expira en 15 minutos.
+
+**Validaciones de subida** (`POST /api/archivos/upload`):
+
+- Extensiones: `jpg jpeg png webp gif pdf doc docx xls xlsx csv txt`.
+- El **MIME debe corresponder** a la extensión (ej: enviar un `.txt` como `image/png` → 400).
+- Máximo **10 MB** imágenes / **20 MB** documentos.
+- El object key es un UUID generado por el backend; el nombre original se guarda saneado.
+- `es_publico` solo se permite para la carpeta `producto`; el resto se fuerza privado.
+
+**Dedup por SHA-256**: el backend calcula el hash del contenido. Si el archivo ya existe en el
+bucket, se **reutiliza el objeto** (no se sube de nuevo) y solo se crea la referencia nueva;
+la respuesta lo indica con `duplicado: true`. Al borrar, el objeto R2 se elimina únicamente cuando
+no queda ninguna otra fila con el mismo `object_key` (refcount).
+
+**CORS del bucket (necesario para el PDF)**: el PDF se genera en el navegador con `html2canvas`,
+que carga las imágenes por `fetch` → el bucket debe permitir `GET` desde el origin del frontend.
+En Cloudflare → R2 → bucket → **Settings → CORS Policy**:
 
 ```json
 [
@@ -90,89 +296,32 @@ CORS Policy**, agrega:
 ]
 ```
 
-### Organización y detección de duplicados
+## 11. Despliegue (Railway + PostgreSQL)
 
-- Rutas dentro del bucket: `productos/`, `cotizaciones/`, `ordenes-compra/`, `proveedores/`, `documentos/`.
-- Imágenes de productos (públicas) se muestran directamente desde React y entran al PDF.
-- Documentos (privados) se descargan con **URL firmada** (`GET /api/archivos/{id}/descargar`),
-  que valida el JWT y expira en 15 minutos.
-- **Dedup por SHA-256**: si el contenido ya existe, se reutiliza el objeto físico (una sola copia)
-  y solo se crea una referencia nueva. Al borrar, el objeto se elimina únicamente cuando no quedan
-  referencias.
+1. Crear servicio con este repositorio (buildpack de Python).
+2. Variables en Railway:
+   ```
+   DATABASE_URL=postgresql://<user>:<pass>@<host>:5432/<db>
+   SECRET_KEY=<valor-largo-y-aleatorio>
+   ALLOWED_ORIGINS=http://localhost:5173,https://crm-importaciones-frontend-pi.vercel.app
+   REDIS_URL=<opcional>
+   R2_ACCOUNT_ID=<...>
+   R2_ACCESS_KEY_ID=<...>
+   R2_SECRET_ACCESS_KEY=<...>
+   R2_BUCKET_NAME=<...>
+   ```
+3. Al desplegar se ejecuta `main:app` (Railway detecta el `Procfile`/configuración del servicio;
+   comando sugerido: `uvicorn main:app --host 0.0.0.0 --port ${PORT}`).
+4. La API queda en `https://crm-importaciones-backend-production.up.railway.app`. Verificar:
+   `GET /api/health` → 200.
 
-### Endpoints de archivos
+> El backend solo sirve la API: `GET /` responde 404 en producción. El frontend corre en un
+> dominio aparte (Vercel) y apunta a esta URL vía `VITE_API_URL`.
 
-| Método | Ruta | Descripción |
-|---|---|---|
-| POST | `/api/archivos/upload` | Subir archivo (valida extensión/MIME/tamaño/nombre) |
-| GET | `/api/archivos/?entidad_tipo=&entidad_id=` | Listar adjuntos de una entidad |
-| GET | `/api/archivos/{id}` | Metadatos + URL (pública o firmada) |
-| GET | `/api/archivos/{id}/descargar` | Redirige a URL firmada temporal (requiere JWT) |
-| DELETE | `/api/archivos/{id}` | Eliminar (con conteo de referencias) |
+---
 
-## Estructura
+## Notas de desarrollo
 
-```
-app/
-├── main.py              # FastAPI app, CORS, startups
-├── database.py          # SQLAlchemy engine y session
-├── seed.py              # datos de prueba
-├── models/              # modelos SQLAlchemy
-│   ├── cliente.py       # Cliente + Contacto
-│   ├── cotizacion.py    # Cotizacion + ItemCotizacion
-│   ├── orden_compra.py  # OrdenCompra + ItemOrdenCompra
-│   ├── producto.py
-│   └── proveedor.py
-├── schemas/             # schemas Pydantic (request/response)
-├── routers/             # endpoints
-│   ├── clientes.py
-│   ├── cotizaciones.py  # CRUD + transiciones de estado + PDF data
-│   ├── ordenes_compra.py
-│   ├── productos.py
-│   ├── proveedores.py
-│   ├── divisas.py       # tipo de cambio
-│   ├── upload.py        # subida de imágenes (fallback local)
-│   └── archivos.py      # archivos en Cloudflare R2 (subir/listar/descargar/eliminar)
-└── services/
-    ├── cotizacion_engine.py  # lógica de cálculo (flete, margen, IVA)
-    ├── divisa.py             # consulta mindicador.cl / open.er-api.com
-    ├── image_processor.py    # rembg + PIL (fondo blanco, crop, ajustes, WebP)
-    ├── cache.py              # Redis con fallback en memoria
-    ├── referencias.py        # referencias del login
-    └── storage.py            # cliente Cloudflare R2 (S3-compatible)
-```
-
-## Endpoints principales
-
-| Método | Ruta | Descripción |
-|---|---|---|
-| GET/POST | `/api/clientes/` | listar/crear clientes |
-| GET/POST | `/api/proveedores/` | listar/crear proveedores |
-| GET/POST | `/api/productos/` | listar/crear productos |
-| GET/POST | `/api/cotizaciones/` | listar/crear cotizaciones |
-| PATCH | `/api/cotizaciones/{id}/estado` | cambiar estado (Creada → Enviada → Cerrada → ...) |
-| GET | `/api/cotizaciones/{id}/pdf-data` | datos para generar el PDF |
-| POST | `/api/ordenes-compra/` | crear OC desde cotización + proveedor |
-| POST | `/api/upload/` | subir imagen (procesada automáticamente) |
-| GET | `/api/divisas/cambio` | tipo de cambio USD/BRL/EUR |
-
-## Procesamiento de imágenes
-
-Cuando subes una imagen, pasa por este pipeline:
-
-1. Se guarda la original en `uploads/originals/` (privada)
-2. Se elimina la metadata EXIF
-3. Se quita el fondo con rembg, se reemplaza por blanco
-4. Se recorta al contenido (auto-crop con padding)
-5. Ajustes: brillo +5%, contraste +5%, saturación +3%, nitidez +15%
-6. Se redimensiona a max 1200px
-7. Se guarda como WebP al 78% de calidad
-
-La primera subida es lenta (~10-15s) porque rembg descarga el modelo U2Net. Las siguientes toman ~2-3s.
-
-## Notas
-
-- La base de datos se crea automáticamente al iniciar el servidor
-- El seed se puede correr múltiples veces (no duplica datos)
-- Las cotizaciones tienen estados: Creada → Enviada → Cerrada → En Producción → Entregada (o Cancelada en cualquier momento)
-- Las Órdenes de Compra se generan desde una cotización, filtrando items por proveedor
+- El seed del usuario admin está en `app/main.py` (`create_admin_if_needed`).
+- El flag de registro temporal: `REGISTER_ENABLED` (default `true` en dev; desactivar en producción).
+- No hay archivos de secretos en el repo: todo vive en `.env` (local) o en las variables de Railway.
