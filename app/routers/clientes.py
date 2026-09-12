@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.cliente import Cliente, Contacto
+from app.models.cotizacion import Cotizacion
 from app.schemas.cliente import ClienteCreate, ClienteOut, ContactoCreate, ContactoOut
 
 router = APIRouter(prefix="/api/clientes", tags=["clientes"])
@@ -50,8 +52,20 @@ def eliminar_cliente(cliente_id: int, db: Session = Depends(get_db)):
     cliente = db.query(Cliente).get(cliente_id)
     if not cliente:
         raise HTTPException(404, "Cliente no encontrado")
-    db.delete(cliente)
-    db.commit()
+
+    n_cotizaciones = db.query(Cotizacion).filter(Cotizacion.cliente_id == cliente_id).count()
+    if n_cotizaciones:
+        raise HTTPException(
+            409,
+            f"No se puede eliminar el cliente: tiene {n_cotizaciones} cotización(es) asociada(s).",
+        )
+
+    try:
+        db.delete(cliente)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "No se puede eliminar el cliente: tiene registros asociados.")
 
 
 @router.get("/{cliente_id}/contactos", response_model=list[ContactoOut])
