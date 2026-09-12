@@ -1,6 +1,8 @@
 from pydantic import BaseModel
 from datetime import datetime
 
+from app.schemas.cliente import ClienteOut, ContactoOut
+
 
 class ItemCotizacionBase(BaseModel):
     producto_id: int | None = None
@@ -95,6 +97,8 @@ class CotizacionOut(CotizacionBase):
     items: list[ItemCotizacionOut] = []
     total_general: float = 0
     created_at: datetime
+    cliente: ClienteOut | None = None
+    contacto: ContactoOut | None = None
 
     model_config = {"from_attributes": True}
 

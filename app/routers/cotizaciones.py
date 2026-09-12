@@ -50,6 +50,9 @@ def _total_cotizacion(cot) -> float:
 def _completar_out(cot, db) -> CotizacionOut:
     out = CotizacionOut.model_validate(cot)
     out.total_general = _total_cotizacion(cot)
+    out.cliente = db.query(Cliente).get(cot.cliente_id)
+    if cot.contacto_id:
+        out.contacto = db.query(Contacto).get(cot.contacto_id)
     if cot.importacion_id:
         imp = db.query(Importacion).get(cot.importacion_id)
         out.importacion_correlativo = imp.correlativo if imp else ""
