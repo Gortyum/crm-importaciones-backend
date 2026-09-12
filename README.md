@@ -36,6 +36,7 @@ app/
 ├── routers/                # Endpoints por recurso (ver sección 7)
 ├── schemas/                # Pydantic (request/response)
 └── services/
+    ├── auth_service.py         # bcrypt + JWT
     ├── cotizacion_engine.py    # cálculo de cotización (flete, margen, IVA)
     ├── importacion_engine.py   # cálculo de importación (FOB → CIF → landed cost)
     ├── divisa.py               # tipo de cambio (mindicador.cl + open.er-api.com)
@@ -43,9 +44,7 @@ app/
     ├── referencias.py          # catálogos, estados y TC devueltos al iniciar sesión
     ├── cache.py                # Redis con fallback en memoria
     ├── image_processor.py      # pipeline de imágenes (EXIF, ajustes, resize → WebP)
-    ├── storage.py              # cliente Cloudflare R2 (S3-compatible)
-    ├── pdf_data.py             # datos estructurados para generar PDF del lado React
-    └── referencias.py          # referencias del login
+    └── storage.py              # cliente Cloudflare R2 (S3-compatible)
 ```
 
 ## 3. Puesta en marcha (desarrollo local)
@@ -69,8 +68,11 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 - Documentación interactiva: `http://localhost:8000/docs`
 - Health check: `http://localhost:8000/api/health`
-- Al arrancar se crean las tablas, se siembra el usuario **admin / admin123** (si no existe)
-  y se inserta la configuración por defecto.
+- Al arrancar se crean las tablas (si no existen) y la configuración por defecto
+  (IVA 19%, arancel general 6%, arancel Mercosur 0%).
+- Para el primer login usa `POST /api/auth/register` (endpoint temporal) o ejecuta
+  `python -m app.seed` para cargar clientes, proveedores y productos de ejemplo
+  (no crea usuarios).
 
 ## 4. Variables de entorno
 
@@ -103,8 +105,9 @@ flujo local (`/api/upload/` + `/uploads`) sigue operando para desarrollo.
 ## 5. Autenticación y referencias
 
 - **Login**: `POST /api/auth/login` → devuelve `access_token`, `username` y las **referencias**.
-- **Registro temporal**: `POST /api/auth/register` (permite crear el primer administrador; se puede
-  desactivar con `REGISTER_ENABLED=false` — el .env.example la menciona como opcional).
+- **Registro (temporal)**: `POST /api/auth/register` sirve para crear el primer administrador.
+  Está marcado como provisional en el código («se retira cuando se indique»); en producción
+  conviene quitarlo o bloquearlo por red cuando el primer usuario exista.
 - `GET /api/auth/me` → datos del usuario autenticado.
 - `GET /api/auth/referencias` → catálogos y constantes del negocio:
 
@@ -120,7 +123,8 @@ flujo local (`/api/upload/` + `/uploads`) sigue operando para desarrollo.
 | `fecha_tc` | Fecha de los tipos de cambio |
 
 Las referencias se cachean vía `app/services/cache.py` (Redis si `REDIS_URL` existe, con fallback
-en memoria); el TTl es corto para que el tipo de cambio no quede viejo.
+en memoria) con **TTL de 10 minutos**; si el TC quedara viejo, basta reiniciar o limpiar el caché,
+y `refreshReferencias` del frontend las vuelve a pedir sin re-loguear.
 
 ## 6. Base de datos y migraciones
 
@@ -240,9 +244,16 @@ Modelo **FOB → CIF → arancel → contingencia → landed cost → precio de 
 
 ### Pipeline local (fallback) — `/api/upload/`
 
-Subida multipart → se valida/tipo de imagen → debe almacenarse en `UPLOAD_DIR` y se reemplaza el
-tipo: si no coincide se elimina y devuelve error. Sirve la imagen en `/uploads/{archivo}`.
-En producción el almacenamiento primario es Cloudflare R2; `/api/upload/` queda como respaldo.
+`POST /api/upload/` recibe una imagen multipart y valida: MIME debe ser `image/jpeg|png|webp|gif`
+y tamaño ≤ 10 MB. Luego `process_image` (`app/services/image_processor.py`):
+
+1. Guarda el **original** (UUID.ext) en `uploads/originals/`.
+2. Procesa con PIL: elimina metadatos EXIF, ajusta brillo/contraste/color/nitidez,
+   redimensiona a 1200 px máximo (LANCZOS) y guarda como **WebP** (calidad 78) en `uploads/`.
+3. Devuelve `{ url: "/uploads/<uuid>.webp", filename, original_filename }`.
+
+La imagen se sirve en `/uploads/{archivo}`. En producción el almacenamiento primario es
+Cloudflare R2; `/api/upload/` queda como respaldo para desarrollo.
 
 ### Cloudflare R2 — `/api/archivos/*`
 
@@ -310,8 +321,8 @@ En Cloudflare → R2 → bucket → **Settings → CORS Policy**:
    R2_SECRET_ACCESS_KEY=<...>
    R2_BUCKET_NAME=<...>
    ```
-3. Al desplegar se ejecuta `main:app` (Railway detecta el `Procfile`/configuración del servicio;
-   comando sugerido: `uvicorn main:app --host 0.0.0.0 --port ${PORT}`).
+3. Al desplegar se ejecuta el comando de arranque del servicio; verifica que apunte a `main:app`,
+   por ejemplo: `uvicorn main:app --host 0.0.0.0 --port ${PORT}` (Railway provee `PORT`).
 4. La API queda en `https://crm-importaciones-backend-production.up.railway.app`. Verificar:
    `GET /api/health` → 200.
 
@@ -322,6 +333,6 @@ En Cloudflare → R2 → bucket → **Settings → CORS Policy**:
 
 ## Notas de desarrollo
 
-- El seed del usuario admin está en `app/main.py` (`create_admin_if_needed`).
-- El flag de registro temporal: `REGISTER_ENABLED` (default `true` en dev; desactivar en producción).
+- Cómo crear el primer usuario: `POST /api/auth/register` (temporal; retirar en producción).
+- Datos de ejemplo (clientes/proveedores/productos): `python -m app.seed` — no crea usuarios.
 - No hay archivos de secretos en el repo: todo vive en `.env` (local) o en las variables de Railway.
