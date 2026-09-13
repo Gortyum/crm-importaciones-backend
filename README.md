@@ -226,9 +226,8 @@ Modelo **FOB → CIF → arancel → contingencia → landed cost → precio de 
    internacionales siempre forman parte del **CIF** (convertidos según su divisa), incluso si se
    pagan en CLP; el tipo **`otros`** se acumula aparte (convertido a CLP) y se **suma al final**
    del costo de almacén, sin entrar al CIF ni al arancel.
-3. `cif = fob + flete + seguro`; **arancel** sobre `fob + gastos locales en USD` (los costos
-   pagados en CLP convertidos con el TC) — 6% general, 0% Mercosur con certificado de origen.
-   El flete y el seguro NO forman parte de la base del arancel.
+3. `cif = fob + flete + seguro`; **arancel** sobre el **CIF** — 6% general, 0% Mercosur con
+   certificado de origen. Los gastos locales (CLP) NO forman parte de la base del arancel.
 4. **Contingencia** (% configurado) sobre `cif + gastos extranjeros no CIF`.
 5. **IVA de importación** sobre `(cif + arancel)`.
 6. `costo_almacén` (CLP) = sub.extranjero + arancel + gastos locales + **otros** CLP, repartido

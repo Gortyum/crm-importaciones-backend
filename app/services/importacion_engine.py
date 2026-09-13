@@ -96,8 +96,7 @@ def calcular_importacion(
             extranjero_no_cif_usd += monto_usd
 
     cif_total_usd = fob_total + flete_usd + seguro_usd
-    base_arancel_usd = fob_total + (gastos_locales_clp / tc_usd_clp if tc_usd_clp else 0)
-    arancel_usd = base_arancel_usd * (arancel_pct / 100)
+    arancel_usd = cif_total_usd * (arancel_pct / 100)
 
     base_contingencia_usd = cif_total_usd + extranjero_no_cif_usd
     contingencia_usd = base_contingencia_usd * (contingencia_pct / 100)
