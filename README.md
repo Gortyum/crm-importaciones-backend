@@ -231,8 +231,11 @@ Modelo **FOB → CIF → arancel → contingencia → landed cost → precio de 
 4. **Contingencia** (% configurado) sobre `cif + gastos extranjeros no CIF`.
 5. **IVA de importación** sobre `(cif + arancel)`.
 6. `costo_almacén` (CLP) = sub.extranjero + arancel + gastos locales + **otros** CLP, repartido
-   entre items proporcional al FOB → cada item obtiene `costo_unitario_neto`, y con el margen se
+   entre items proporcional al FOB → cada item obtiene `costo_unitario_neto_clp`, y con el margen se
    calcula `precio_venta` (neto + IVA).
+7. **Cotización**: si está vinculada a una importación (o la crea), los precios/subtotales de sus
+   items se calculan sobre el **costo puesto en Chile** (CIF + arancel + contingencias) de esa
+   importación, igual que el preview. Sin importación vinculada se usa FOB + flete + envío del item.
 
 ### Edición de cotizaciones y bloqueo por PDF
 

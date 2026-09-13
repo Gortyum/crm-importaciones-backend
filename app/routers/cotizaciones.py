@@ -17,6 +17,8 @@ from app.schemas.cotizacion import (
     CotizacionImportacion,
 )
 from app.services.cotizacion_engine import calcular_item
+from app.services.importacion_engine import calcular_importacion
+from app.services.config_service import get_config
 
 router = APIRouter(prefix="/api/cotizaciones", tags=["cotizaciones"])
 
@@ -48,6 +50,30 @@ def generar_correlativo(db: Session) -> str:
 
 def _total_cotizacion(cot) -> float:
     return sum(i.total for i in cot.items)
+
+
+def _aplicar_landed_a_items(db: Session, cot: Cotizacion, imp_items: list) -> None:
+    """Recalcula subtotal/IVA/total de los items de la cotización usando el costo
+    puesto en Chile (CIF = fob + flete + seguro) calculado por la importación
+    vinculada. Igual comportamiento que el preview en el frontend."""
+    for i, item_db in enumerate(cot.items):
+        ri = imp_items[i] if i < len(imp_items) else None
+        if not ri or not ri.get("costo_unitario_neto_clp"):
+            continue
+        landed_unit = ri["costo_unitario_neto_clp"]
+        margen = item_db.margen_pct
+        if margen >= 100:
+            neto_unit = 0.0
+        else:
+            neto_unit = landed_unit / (1 - margen / 100)
+        neto_unit *= 1 - (item_db.descuento_pct or 0) / 100
+        cantidad = item_db.cantidad or 0
+        subtotal = round(neto_unit * cantidad)
+        item_db.precio_venta_unitario = round(neto_unit)
+        item_db.subtotal = subtotal
+        item_db.iva_monto = round(subtotal * (item_db.iva_pct or 19) / 100)
+        item_db.total = round(subtotal + item_db.iva_monto)
+    db.commit()
 
 
 def _completar_out(cot, db) -> CotizacionOut:
@@ -129,7 +155,8 @@ async def crear_cotizacion(data: CotizacionCreate, db: Session = Depends(get_db)
     db.refresh(cot)
 
     if data.importacion:
-        await _crear_importacion_desde_cotizacion(db, cot, data.importacion)
+        creada = await _crear_importacion_desde_cotizacion(db, cot, data.importacion)
+        _aplicar_landed_a_items(db, cot, creada.items)
         db.refresh(cot)
 
     return _completar_out(cot, db)
@@ -156,9 +183,52 @@ def actualizar_cotizacion(cotizacion_id: int, data: CotizacionUpdate, db: Sessio
     cot.tipo_cambio = data.tipo_cambio
     cot.notas = data.notas
 
+    # Si la cotización está vinculada a una importación, los precios se calculan
+    # sobre el costo puesto en Chile (CIF + arancel) de esa importación.
+    config = get_config(db)
+    imp_r = None
+    imp = db.query(Importacion).get(cot.importacion_id) if cot.importacion_id else None
+    if imp:
+        imp_r = calcular_importacion(
+            items=[
+                {"producto_id": i.producto_id, "descripcion": i.descripcion,
+                 "cantidad": i.cantidad, "precio_unitario_fabrica": i.costo_original,
+                 "divisa": i.divisa_origen, "margen_pct": i.margen_pct}
+                for i in data.items
+            ],
+            costos=[
+                {"monto": c.monto, "divisa": c.divisa, "tipo_costo": c.tipo_costo, "categoria": c.categoria}
+                for c in imp.costos
+            ],
+            tc_usd_clp=imp.tc_usd_clp,
+            tc_brl_usd=imp.tc_brl_usd,
+            contingencia_pct=imp.contingencia_pct,
+            cert_origen=imp.cert_origen,
+            arancel_general=config["arancel_general"],
+            arancel_mercosur=config["arancel_mercosur"],
+            iva_pct=config["iva_chile"],
+        )["items"]
+
     db.query(ItemCotizacion).filter(ItemCotizacion.cotizacion_id == cot.id).delete()
-    for item_data in data.items:
+    for idx, item_data in enumerate(data.items):
         calc = calcular_item(item_data)
+        if imp_r and idx < len(imp_r) and imp_r[idx].get("costo_unitario_neto_clp"):
+            landed_unit = imp_r[idx]["costo_unitario_neto_clp"]
+            margen = item_data.margen_pct
+            if margen < 100:
+                neto_unit = landed_unit / (1 - margen / 100) * (1 - (item_data.descuento_pct or 0) / 100)
+            else:
+                neto_unit = 0.0
+            cantidad = item_data.cantidad or 0
+            subtotal = round(neto_unit * cantidad)
+            iva_monto = round(subtotal * (item_data.iva_pct or 19) / 100)
+            calc = {
+                "costo_flete": calc["costo_flete"],
+                "precio_venta_unitario": round(neto_unit),
+                "subtotal": subtotal,
+                "iva_monto": iva_monto,
+                "total": round(subtotal + iva_monto),
+            }
         db.add(ItemCotizacion(
             cotizacion_id=cot.id,
             producto_id=item_data.producto_id,
@@ -296,7 +366,9 @@ async def crear_importacion_desde_cot(cotizacion_id: int, db: Session = Depends(
     if cot.importacion_id:
         raise HTTPException(400, "Esta cotización ya está vinculada a una importación")
 
-    return await _crear_importacion_desde_cotizacion(db, cot)
+    creada = await _crear_importacion_desde_cotizacion(db, cot)
+    _aplicar_landed_a_items(db, cot, creada.items)
+    return creada
 
 
 @router.get("/{cotizacion_id}/pdf-data", response_model=CotizacionPDFData)
