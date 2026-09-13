@@ -9,6 +9,7 @@ from app.models.cliente import Cliente, Contacto
 from app.models.importacion import Importacion, ImportacionItem, ImportacionProveedor
 from app.schemas.cotizacion import (
     CotizacionCreate,
+    CotizacionUpdate,
     CotizacionOut,
     CotizacionUpdateEstado,
     CotizacionPDFData,
@@ -134,6 +135,60 @@ async def crear_cotizacion(data: CotizacionCreate, db: Session = Depends(get_db)
     return _completar_out(cot, db)
 
 
+@router.put("/{cotizacion_id}", response_model=CotizacionOut)
+def actualizar_cotizacion(cotizacion_id: int, data: CotizacionUpdate, db: Session = Depends(get_db)):
+    cot = db.query(Cotizacion).get(cotizacion_id)
+    if not cot:
+        raise HTTPException(404, "Cotización no encontrada")
+    if cot.pdf_emitido:
+        raise HTTPException(
+            409,
+            "Esta cotización ya generó su PDF: no se puede editar. Ajusta en la app." ,
+        )
+
+    cliente = db.query(Cliente).get(data.cliente_id)
+    if not cliente:
+        raise HTTPException(400, "Cliente no encontrado")
+
+    cot.cliente_id = data.cliente_id
+    cot.contacto_id = data.contacto_id
+    cot.divisa_original = data.divisa_original
+    cot.tipo_cambio = data.tipo_cambio
+    cot.notas = data.notas
+
+    db.query(ItemCotizacion).filter(ItemCotizacion.cotizacion_id == cot.id).delete()
+    for item_data in data.items:
+        calc = calcular_item(item_data)
+        db.add(ItemCotizacion(
+            cotizacion_id=cot.id,
+            producto_id=item_data.producto_id,
+            proveedor_id=item_data.proveedor_id,
+            descripcion=item_data.descripcion,
+            cantidad=item_data.cantidad,
+            costo_original=item_data.costo_original,
+            divisa_origen=item_data.divisa_origen,
+            tipo_cambio=item_data.tipo_cambio,
+            peso_kg=item_data.peso_kg,
+            volumen_m3=item_data.volumen_m3,
+            tipo_flete=item_data.tipo_flete,
+            costo_flete=calc["costo_flete"],
+            costo_envio=item_data.costo_envio,
+            imagen_url=item_data.imagen_url,
+            margen_pct=item_data.margen_pct,
+            descuento_pct=item_data.descuento_pct,
+            tipo_personalizacion=item_data.tipo_personalizacion,
+            iva_pct=item_data.iva_pct,
+            precio_venta_unitario=calc["precio_venta_unitario"],
+            subtotal=calc["subtotal"],
+            iva_monto=calc["iva_monto"],
+            total=calc["total"],
+        ))
+
+    db.commit()
+    db.refresh(cot)
+    return _completar_out(cot, db)
+
+
 @router.patch("/{cotizacion_id}/estado", response_model=CotizacionOut)
 def cambiar_estado(cotizacion_id: int, data: CotizacionUpdateEstado, db: Session = Depends(get_db)):
     cot = db.query(Cotizacion).get(cotizacion_id)
@@ -249,6 +304,11 @@ def obtener_datos_pdf(cotizacion_id: int, db: Session = Depends(get_db)):
     cot = db.query(Cotizacion).get(cotizacion_id)
     if not cot:
         raise HTTPException(404, "Cotización no encontrada")
+
+    if not cot.pdf_emitido:
+        cot.pdf_emitido = True
+        db.commit()
+        db.refresh(cot)
 
     cliente = db.query(Cliente).get(cot.cliente_id)
     contacto = db.query(Contacto).get(cot.contacto_id) if cot.contacto_id else None

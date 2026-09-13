@@ -83,6 +83,12 @@ def _migrar_columnas():
     from sqlalchemy import text, inspect
 
     insp = inspect(engine)
+    if "cotizaciones" in insp.get_table_names():
+        columnas = {c["name"] for c in insp.get_columns("cotizaciones")}
+        if "pdf_emitido" not in columnas:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE cotizaciones ADD COLUMN pdf_emitido BOOLEAN DEFAULT 0"))
+                conn.execute(text("UPDATE cotizaciones SET pdf_emitido = 0 WHERE pdf_emitido IS NULL"))
     if "items_cotizacion" in insp.get_table_names():
         columnas = {c["name"] for c in insp.get_columns("items_cotizacion")}
         if "tipo_cambio" not in columnas:

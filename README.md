@@ -169,7 +169,7 @@ Tablas principales:
 | Cotizaciones | CRUD | `/api/cotizaciones/` |
 | Cotizaciones | PATCH | `/api/cotizaciones/{id}/estado` |
 | Cotizaciones | POST | `/api/cotizaciones/{id}/crear-importacion` |
-| Cotizaciones | GET | `/api/cotizaciones/{id}/pdf-data` |
+| Cotizaciones | GET | `/api/cotizaciones/{id}/pdf-data` — **marca la cotización como emitida** |
 | Importaciones | CRUD | `/api/importaciones/` |
 | Importaciones | PATCH | `/api/importaciones/{id}/estado` |
 | Importaciones | POST | `/api/importaciones/{id}/pasar-a-cotizacion` |
@@ -222,13 +222,25 @@ Modelo **FOB → CIF → arancel → contingencia → landed cost → precio de 
 
 1. Cada item: precio de fábrica convertido a USD → `fob` = precio × cantidad.
 2. Costos según transporte (Courier / Aéreo / Terrestre): flete internacional, seguro, gastos de
-   despacho, honorarios de agente y flete local, cada uno en su divisa.
-3. `cif = fob + flete + seguro`; **arancel** sobre CIF (6% general, 0% Mercosur con certificado de
-   origen).
+   despacho, honorarios de agente y flete local, cada uno en su divisa. El **flete** y el **seguro**
+   internacionales siempre forman parte del **CIF** (convertidos según su divisa), incluso si se
+   pagan en CLP; el tipo **`otros`** se acumula aparte (convertido a CLP) y se **suma al final**
+   del costo de almacén, sin entrar al CIF ni al arancel.
+3. `cif = fob + flete + seguro`; **arancel** sobre `fob + gastos locales en USD` (los costos
+   pagados en CLP convertidos con el TC) — 6% general, 0% Mercosur con certificado de origen.
+   El flete y el seguro NO forman parte de la base del arancel.
 4. **Contingencia** (% configurado) sobre `cif + gastos extranjeros no CIF`.
 5. **IVA de importación** sobre `(cif + arancel)`.
-6. `costo_almacén` (CLP) repartido entre items proporcional al FOB → cada item obtiene
-   `costo_unitario_neto`, y con el margen se calcula `precio_venta` (neto + IVA).
+6. `costo_almacén` (CLP) = sub.extranjero + arancel + gastos locales + **otros** CLP, repartido
+   entre items proporcional al FOB → cada item obtiene `costo_unitario_neto`, y con el margen se
+   calcula `precio_venta` (neto + IVA).
+
+### Edición de cotizaciones y bloqueo por PDF
+
+`PUT /api/cotizaciones/{id}` permite editar cliente, contacto, notas y items mientras la
+cotización tenga `pdf_emitido = False`. La primera descarga de `/pdf-data` (generación del PDF)
+marca la cotización como **emitida** y cualquier edición posterior responde `409 Conflict`; el
+cambio de estado (cerrada, cancelada, etc.) sigue permitido para el flujo comercial.
 
 ### Divisas (`divisa.py`)
 

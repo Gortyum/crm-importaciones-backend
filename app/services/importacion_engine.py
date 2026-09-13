@@ -3,6 +3,7 @@ COSTOS_POR_TRANSPORTE = {
         {"categoria": "Flete_Courier", "tipo": "flete"},
         {"categoria": "Gastos_Despacho_Courier", "tipo": "despacho"},
         {"categoria": "Flete_Terrestre_Local", "tipo": "flete_local"},
+        {"categoria": "Otros", "tipo": "otros"},
     ],
     "Aereo": [
         {"categoria": "Flete_Aereo_Int", "tipo": "flete"},
@@ -10,6 +11,7 @@ COSTOS_POR_TRANSPORTE = {
         {"categoria": "Gastos_Terminal_Aereo", "tipo": "despacho"},
         {"categoria": "Honorarios_Agente_Aduana", "tipo": "honorarios"},
         {"categoria": "Flete_Terrestre_Local", "tipo": "flete_local"},
+        {"categoria": "Otros", "tipo": "otros"},
     ],
     "Terrestre": [
         {"categoria": "Flete_Terrestre_Int", "tipo": "flete"},
@@ -17,6 +19,7 @@ COSTOS_POR_TRANSPORTE = {
         {"categoria": "Gastos_Frontera_PuertoSeco", "tipo": "despacho"},
         {"categoria": "Honorarios_Agente_Aduana", "tipo": "honorarios"},
         {"categoria": "Flete_Terrestre_Local", "tipo": "flete_local"},
+        {"categoria": "Otros", "tipo": "otros"},
     ],
 }
 
@@ -31,6 +34,7 @@ CATEGORIAS_COSTO = {
     "Gastos_Frontera_PuertoSeco": "Gastos Frontera / Puerto Seco",
     "Honorarios_Agente_Aduana": "Honorarios Agente de Aduana",
     "Flete_Terrestre_Local": "Flete Terrestre Local (Chile)",
+    "Otros": "Otros gastos",
 }
 
 
@@ -41,6 +45,14 @@ def to_usd(monto: float, divisa: str, tc_usd_clp: float, tc_brl_usd: float) -> f
     if d == "BRL":
         return monto * tc_brl_usd
     return monto
+
+
+def to_clp(monto: float, divisa: str, tc_usd_clp: float, tc_brl_usd: float) -> float:
+    d = (divisa or "USD").upper()
+    if d == "CLP":
+        return monto
+    monto_usd = to_usd(monto, d, tc_usd_clp, tc_brl_usd)
+    return monto_usd * tc_usd_clp if tc_usd_clp else monto_usd
 
 
 def calcular_importacion(
@@ -68,20 +80,24 @@ def calcular_importacion(
     seguro_usd = 0.0
     extranjero_no_cif_usd = 0.0
     gastos_locales_clp = 0.0
+    otros_clp = 0.0
     for c in costos:
         tipo = c["tipo_costo"]
         monto_usd = to_usd(c["monto"], c["divisa"], tc_usd_clp, tc_brl_usd)
-        if c["divisa"] and c["divisa"].upper() == "CLP":
-            gastos_locales_clp += c["monto"]
+        if tipo == "otros":
+            otros_clp += to_clp(c["monto"], c["divisa"], tc_usd_clp, tc_brl_usd)
         elif tipo == "flete":
             flete_usd += monto_usd
         elif tipo == "seguro":
             seguro_usd += monto_usd
+        elif c["divisa"] and c["divisa"].upper() == "CLP":
+            gastos_locales_clp += c["monto"]
         else:
             extranjero_no_cif_usd += monto_usd
 
     cif_total_usd = fob_total + flete_usd + seguro_usd
-    arancel_usd = cif_total_usd * (arancel_pct / 100)
+    base_arancel_usd = fob_total + (gastos_locales_clp / tc_usd_clp if tc_usd_clp else 0)
+    arancel_usd = base_arancel_usd * (arancel_pct / 100)
 
     base_contingencia_usd = cif_total_usd + extranjero_no_cif_usd
     contingencia_usd = base_contingencia_usd * (contingencia_pct / 100)
@@ -91,6 +107,7 @@ def calcular_importacion(
         sub_ext_seguro_usd * tc_usd_clp
         + arancel_usd * tc_usd_clp
         + gastos_locales_clp
+        + otros_clp
     )
     iva_importacion_clp = (cif_total_usd + arancel_usd) * (iva_pct / 100) * tc_usd_clp
 
@@ -142,6 +159,7 @@ def calcular_importacion(
         "contingencia_usd": round(contingencia_usd, 2),
         "sub_total_extranjero_usd": round(sub_ext_seguro_usd, 2),
         "gastos_locales_clp": round(gastos_locales_clp, 2),
+        "otros_clp": round(otros_clp, 2),
         "costo_almacen_clp": round(costo_almacen_clp),
         "iva_importacion_clp": round(iva_importacion_clp),
         "costo_unitario_promedio_clp": round(unitario_promedio),

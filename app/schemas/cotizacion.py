@@ -88,10 +88,16 @@ class CotizacionUpdateEstado(BaseModel):
     estado: str
 
 
+class CotizacionUpdate(CotizacionBase):
+    items: list[ItemCotizacionCreate] = []
+    importacion_id: int | None = None
+
+
 class CotizacionOut(CotizacionBase):
     id: int
     correlativo: str
     estado: str
+    pdf_emitido: bool = False
     fecha: datetime
     importacion_correlativo: str = ""
     items: list[ItemCotizacionOut] = []
