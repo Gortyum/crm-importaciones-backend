@@ -39,7 +39,7 @@ def calcular_item(item: ItemCotizacionCreate) -> dict:
     # El flete es el costo TOTAL de transporte del lote de ese item (no por unidad),
     # por lo que se suma una sola vez, fuera de la multiplicacion por cantidad.
     subtotal_base = (costo_clp + envio) * item.cantidad + flete
-    con_margen = subtotal_base * (1 + item.margen_pct / 100)
+    con_margen = subtotal_base / (1 - item.margen_pct / 100) if item.margen_pct < 100 else subtotal_base
     con_descuento = con_margen * (1 - item.descuento_pct / 100)
 
     precio_venta_unitario = con_descuento / item.cantidad if item.cantidad > 0 else 0

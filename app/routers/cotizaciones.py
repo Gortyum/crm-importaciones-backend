@@ -32,15 +32,17 @@ TRANSICIONES = {
 
 
 def generar_correlativo(db: Session) -> str:
-    anio = datetime.now().year
+    now = datetime.now()
+    anio = now.year
+    mes = now.month
     ultimo = db.query(Cotizacion).filter(
-        Cotizacion.correlativo.like(f"COT-{anio}-%")
+        Cotizacion.correlativo.like(f"COT-{anio}-{mes:02d}-%")
     ).order_by(Cotizacion.id.desc()).first()
     if ultimo:
         num = int(ultimo.correlativo.split("-")[-1]) + 1
     else:
         num = 1
-    return f"COT-{anio}-{num:04d}"
+    return f"COT-{anio}-{mes:02d}-{num:04d}"
 
 
 def _total_cotizacion(cot) -> float:
