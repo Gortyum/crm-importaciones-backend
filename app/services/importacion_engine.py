@@ -125,6 +125,11 @@ def calcular_importacion(
         iva_unit = neto_unit * (iva_pct / 100)
         total_unit = neto_unit + iva_unit
 
+        precio_venta_unitario = round(neto_unit)
+        subtotal_linea = round(neto_unit * cantidad)
+        iva_linea = round(subtotal_linea * (iva_pct / 100))
+        total_linea = subtotal_linea + iva_linea
+
         items_out.append({
             "producto_id": it["producto_id"],
             "descripcion": it["descripcion"],
@@ -138,6 +143,9 @@ def calcular_importacion(
             "precio_venta_neto_clp": round(neto_unit),
             "iva_venta_clp": round(iva_unit),
             "precio_venta_total_clp": round(total_unit),
+            "subtotal_venta_clp": subtotal_linea,
+            "iva_linea_clp": iva_linea,
+            "total_linea_clp": total_linea,
         })
 
     return {
@@ -165,8 +173,8 @@ def calcular_importacion(
         "cantidad_total": cantidad_total,
         "items": items_out,
         "totales_venta": {
-            "neto": round(sum(i["precio_venta_neto_clp"] for i in items_out)),
-            "iva": round(sum(i["iva_venta_clp"] for i in items_out)),
-            "total": round(sum(i["precio_venta_total_clp"] for i in items_out)),
+            "neto": round(sum(i["subtotal_venta_clp"] for i in items_out)),
+            "iva": round(sum(i["iva_linea_clp"] for i in items_out)),
+            "total": round(sum(i["total_linea_clp"] for i in items_out)),
         },
     }

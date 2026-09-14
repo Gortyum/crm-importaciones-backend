@@ -91,6 +91,7 @@ class CotizacionUpdateEstado(BaseModel):
 class CotizacionUpdate(CotizacionBase):
     items: list[ItemCotizacionCreate] = []
     importacion_id: int | None = None
+    importacion: CotizacionImportacion | None = None
 
 
 class CotizacionOut(CotizacionBase):

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.cotizacion import Cotizacion, ItemCotizacion
 from app.models.cliente import Cliente, Contacto
-from app.models.importacion import Importacion, ImportacionItem, ImportacionProveedor
+from app.models.importacion import Importacion, ImportacionItem, ImportacionCosto, ImportacionProveedor
 from app.schemas.cotizacion import (
     CotizacionCreate,
     CotizacionUpdate,
@@ -17,8 +17,6 @@ from app.schemas.cotizacion import (
     CotizacionImportacion,
 )
 from app.services.cotizacion_engine import calcular_item
-from app.services.importacion_engine import calcular_importacion
-from app.services.config_service import get_config
 
 router = APIRouter(prefix="/api/cotizaciones", tags=["cotizaciones"])
 
@@ -183,52 +181,9 @@ def actualizar_cotizacion(cotizacion_id: int, data: CotizacionUpdate, db: Sessio
     cot.tipo_cambio = data.tipo_cambio
     cot.notas = data.notas
 
-    # Si la cotización está vinculada a una importación, los precios se calculan
-    # sobre el costo puesto en Chile (CIF + arancel) de esa importación.
-    config = get_config(db)
-    imp_r = None
-    imp = db.query(Importacion).get(cot.importacion_id) if cot.importacion_id else None
-    if imp:
-        imp_r = calcular_importacion(
-            items=[
-                {"producto_id": i.producto_id, "descripcion": i.descripcion,
-                 "cantidad": i.cantidad, "precio_unitario_fabrica": i.costo_original,
-                 "divisa": i.divisa_origen, "margen_pct": i.margen_pct}
-                for i in data.items
-            ],
-            costos=[
-                {"monto": c.monto, "divisa": c.divisa, "tipo_costo": c.tipo_costo, "categoria": c.categoria}
-                for c in imp.costos
-            ],
-            tc_usd_clp=imp.tc_usd_clp,
-            tc_brl_usd=imp.tc_brl_usd,
-            contingencia_pct=imp.contingencia_pct,
-            cert_origen=imp.cert_origen,
-            arancel_general=config["arancel_general"],
-            arancel_mercosur=config["arancel_mercosur"],
-            iva_pct=config["iva_chile"],
-        )["items"]
-
     db.query(ItemCotizacion).filter(ItemCotizacion.cotizacion_id == cot.id).delete()
-    for idx, item_data in enumerate(data.items):
+    for item_data in data.items:
         calc = calcular_item(item_data)
-        if imp_r and idx < len(imp_r) and imp_r[idx].get("costo_unitario_neto_clp"):
-            landed_unit = imp_r[idx]["costo_unitario_neto_clp"]
-            margen = item_data.margen_pct
-            if margen < 100:
-                neto_unit = landed_unit / (1 - margen / 100) * (1 - (item_data.descuento_pct or 0) / 100)
-            else:
-                neto_unit = 0.0
-            cantidad = item_data.cantidad or 0
-            subtotal = round(neto_unit * cantidad)
-            iva_monto = round(subtotal * (item_data.iva_pct or 19) / 100)
-            calc = {
-                "costo_flete": calc["costo_flete"],
-                "precio_venta_unitario": round(neto_unit),
-                "subtotal": subtotal,
-                "iva_monto": iva_monto,
-                "total": round(subtotal + iva_monto),
-            }
         db.add(ItemCotizacion(
             cotizacion_id=cot.id,
             producto_id=item_data.producto_id,
@@ -254,9 +209,131 @@ def actualizar_cotizacion(cotizacion_id: int, data: CotizacionUpdate, db: Sessio
             total=calc["total"],
         ))
 
+    db.flush()
+    db.refresh(cot)
+
+    # Importación vinculada: persistir costos/TC (Step2) y sincronizar items para que los
+    # precios de la cotización se calculen siempre sobre el costo puesto en Chile.
+    _sincronizar_importacion(db, cot, data)
+
     db.commit()
     db.refresh(cot)
     return _completar_out(cot, db)
+
+
+def _crear_importacion_desde_cotizacion_sync(
+    db: Session, cot: Cotizacion, importacion_data: CotizacionImportacion | None
+) -> Importacion:
+    """Versión síncrona de _crear_importacion_desde_cotizacion usada en la edición
+    cuando se habilita la importación sobre una cotización aún no vinculada."""
+    from app.routers.importaciones import (
+        generar_correlativo as gen_imp,
+        _guardar_calculos,
+        _serializar,
+        ImportacionItem,
+        ImportacionCosto,
+        ImportacionProveedor,
+    )
+    from app.schemas.importacion import ImportacionItemCreate
+
+    importacion_data = importacion_data or CotizacionImportacion()
+
+    items = [
+        ImportacionItemCreate(
+            producto_id=item.producto_id,
+            descripcion=item.descripcion,
+            cantidad=item.cantidad,
+            precio_unitario_fabrica=item.costo_original,
+            divisa=item.divisa_origen,
+            margen_pct=item.margen_pct,
+        )
+        for item in cot.items
+    ]
+
+    tc_usd_clp = (
+        importacion_data.tc_usd_clp
+        if importacion_data.tc_usd_clp and importacion_data.tc_usd_clp > 0
+        else (cot.tipo_cambio or 950.0)
+    )
+    tc_brl_usd = importacion_data.tc_brl_usd if importacion_data.tc_brl_usd else 0.18
+
+    desde = Importacion(
+        correlativo=gen_imp(db),
+        transporte=importacion_data.transporte or "Aereo",
+        cert_origen=importacion_data.cert_origen,
+        tc_usd_clp=tc_usd_clp,
+        tc_brl_usd=tc_brl_usd,
+        contingencia_pct=importacion_data.contingencia_pct,
+        notas=f"Generada desde cotización {cot.correlativo}",
+        cotizacion_id=cot.id,
+        estado="Borrador",
+        historial_estados=[{"estado": "Borrador", "fecha": datetime.now().isoformat()}],
+    )
+    db.add(desde)
+    db.flush()
+    for it in items:
+        db.add(ImportacionItem(importacion_id=desde.id, **it.model_dump()))
+    for c in importacion_data.costos:
+        db.add(ImportacionCosto(importacion_id=desde.id, **c.model_dump()))
+    proveedor_ids = {it.proveedor_id for it in cot.items if it.proveedor_id}
+    for pid in proveedor_ids:
+        db.add(ImportacionProveedor(importacion_id=desde.id, proveedor_id=pid))
+    cot.importacion_id = desde.id
+    db.flush()
+    db.refresh(desde)
+    _guardar_calculos(desde, db)
+    return _serializar(desde, db)
+
+
+def _sincronizar_importacion(db: Session, cot: Cotizacion, data: CotizacionUpdate) -> None:
+    """Mantiene la importación vinculada alineada con la cotización editada:
+    persiste costos/TC (Step2), reemplaza los items de la importación con los de la
+    cotización y recalcula los precios de la cotización sobre el costo puesto en Chile."""
+    from app.routers.importaciones import _guardar_calculos, _serializar
+
+    imp = db.query(Importacion).get(cot.importacion_id) if cot.importacion_id else None
+
+    if imp is None and data.importacion:
+        _crear_importacion_desde_cotizacion_sync(db, cot, data.importacion)
+        imp = db.query(Importacion).get(cot.importacion_id) if cot.importacion_id else None
+
+    if imp is None:
+        return
+
+    if data.importacion is not None:
+        imp.transporte = data.importacion.transporte
+        imp.cert_origen = data.importacion.cert_origen
+        if data.importacion.tc_usd_clp and data.importacion.tc_usd_clp > 0:
+            imp.tc_usd_clp = data.importacion.tc_usd_clp
+        imp.tc_brl_usd = data.importacion.tc_brl_usd or 0.18
+        imp.contingencia_pct = data.importacion.contingencia_pct
+
+        db.query(ImportacionCosto).filter(ImportacionCosto.importacion_id == imp.id).delete()
+        for c in data.importacion.costos:
+            db.add(ImportacionCosto(importacion_id=imp.id, **c.model_dump()))
+
+    db.query(ImportacionItem).filter(ImportacionItem.importacion_id == imp.id).delete()
+    for item in cot.items:
+        db.add(ImportacionItem(
+            importacion_id=imp.id,
+            producto_id=item.producto_id,
+            descripcion=item.descripcion,
+            cantidad=item.cantidad,
+            precio_unitario_fabrica=item.costo_original,
+            divisa=item.divisa_origen,
+            margen_pct=item.margen_pct,
+        ))
+
+    proveedor_ids = {it.proveedor_id for it in cot.items if it.proveedor_id}
+    db.query(ImportacionProveedor).filter(ImportacionProveedor.importacion_id == imp.id).delete()
+    for pid in proveedor_ids:
+        db.add(ImportacionProveedor(importacion_id=imp.id, proveedor_id=pid))
+
+    db.flush()
+    db.refresh(imp)
+    s = _serializar(imp, db)
+    _guardar_calculos(imp, db)
+    _aplicar_landed_a_items(db, cot, s.resultado["items"])
 
 
 @router.patch("/{cotizacion_id}/estado", response_model=CotizacionOut)
