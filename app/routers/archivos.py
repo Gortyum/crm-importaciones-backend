@@ -4,7 +4,7 @@ import uuid
 from pathlib import PurePath
 
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, File
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -213,6 +213,26 @@ def descargar_archivo(
     if not archivo:
         raise HTTPException(404, "Archivo no encontrado")
     return RedirectResponse(_storage_o_503().url_firmada(archivo.object_key, 900))
+
+
+@router.get("/{archivo_id}/contenido")
+def contenido_archivo(
+    archivo_id: int,
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(obtener_usuario_actual),
+):
+    """Devuelve el contenido del archivo por el propio backend (same-origin).
+
+    Permite renderizar imágenes en canvas/PDF sin necesidad de CORS en R2.
+    """
+    archivo = db.query(Archivo).get(archivo_id)
+    if not archivo:
+        raise HTTPException(404, "Archivo no encontrado")
+    try:
+        contenido = _storage_o_503().contenido(archivo.object_key)
+    except Exception as exc:
+        raise HTTPException(502, f"Error leyendo archivo: {type(exc).__name__}")
+    return Response(contenido, media_type=archivo.mime_type or "application/octet-stream")
 
 
 @router.delete("/{archivo_id}", status_code=204)

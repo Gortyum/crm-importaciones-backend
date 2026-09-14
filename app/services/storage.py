@@ -57,6 +57,11 @@ class R2Storage:
     def eliminar(self, key: str) -> None:
         self._client.delete_object(Bucket=self.bucket_name, Key=key)
 
+    def contenido(self, key: str) -> bytes:
+        """Lee el contenido completo de un objeto privado."""
+        resp = self._client.get_object(Bucket=self.bucket_name, Key=key)
+        return resp["Body"].read()
+
     def existe(self, key: str) -> bool:
         try:
             self._client.head_object(Bucket=self.bucket_name, Key=key)
