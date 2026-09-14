@@ -5,6 +5,7 @@ from app.models.cotizacion import Cotizacion, ItemCotizacion
 from app.models.orden_compra import OrdenCompra, ItemOrdenCompra
 from app.models.importacion import Importacion, ImportacionItem, ImportacionCosto, ImportacionProveedor
 from app.models.configuracion import ConfigGlobal
+from app.models.documento import Documento
 from app.models.enums import (
     EstadoCotizacion,
     TipoFlete,
@@ -27,6 +28,7 @@ __all__ = [
     "ImportacionCosto",
     "ImportacionProveedor",
     "ConfigGlobal",
+    "Documento",
     "EstadoCotizacion",
     "TipoFlete",
     "TipoPersonalizacion",

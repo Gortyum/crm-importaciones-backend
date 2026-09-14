@@ -23,6 +23,7 @@ from app.routers import (
     upload,
     archivos,
     auth,
+    documentos,
 )
 from app.routers.auth import requiere_autenticacion
 from app.models.proveedor import ProveedorCategoria
@@ -58,6 +59,7 @@ app.include_router(importaciones.router, dependencies=[Depends(requiere_autentic
 app.include_router(config.router, dependencies=[Depends(requiere_autenticacion)])
 app.include_router(upload.router, dependencies=[Depends(requiere_autenticacion)])
 app.include_router(archivos.router, dependencies=[Depends(requiere_autenticacion)])
+app.include_router(documentos.router, dependencies=[Depends(requiere_autenticacion)])
 
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
