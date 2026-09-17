@@ -100,6 +100,7 @@ class CotizacionOut(CotizacionBase):
     estado: str
     pdf_emitido: bool = False
     fecha: datetime
+    historial_estados: list | None = None
     importacion_correlativo: str = ""
     items: list[ItemCotizacionOut] = []
     total_general: float = 0

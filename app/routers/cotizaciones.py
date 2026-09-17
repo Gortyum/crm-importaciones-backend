@@ -22,14 +22,23 @@ router = APIRouter(prefix="/api/cotizaciones", tags=["cotizaciones"])
 
 ESTADOS_VALIDOS = ["Creada", "Enviada", "Cerrada", "En Produccion", "Entregada", "Cancelada"]
 
-TRANSICIONES = {
-    "Creada": ["Enviada", "Cancelada"],
-    "Enviada": ["Cerrada", "Cancelada"],
-    "Cerrada": ["En Produccion", "Cancelada"],
-    "En Produccion": ["Entregada", "Cancelada"],
-    "Entregada": [],
-    "Cancelada": [],
-}
+# Estados terminales: no admiten salida.
+TERMINALES = {"Entregada", "Cancelada"}
+
+
+def transiciones_validas(estado: str) -> list[str]:
+    """Transiciones permitidas: avanzar a cualquier etapa posterior del flujo
+    o cancelar. No se puede retroceder ni salir de un estado terminal."""
+    if estado in TERMINALES:
+        return []
+    try:
+        pos = ESTADOS_VALIDOS.index(estado)
+    except ValueError:
+        return []
+    posteriores = ESTADOS_VALIDOS[pos + 1 :]
+    if "Cancelada" not in posteriores:
+        posteriores.append("Cancelada")
+    return posteriores
 
 
 def generar_correlativo(db: Session) -> str:
@@ -345,14 +354,14 @@ def cambiar_estado(cotizacion_id: int, data: CotizacionUpdateEstado, db: Session
     if data.estado not in ESTADOS_VALIDOS:
         raise HTTPException(400, f"Estado inválido: {data.estado}")
 
-    permitidos = TRANSICIONES.get(cot.estado, [])
+    permitidos = transiciones_validas(cot.estado)
     if data.estado not in permitidos:
         raise HTTPException(
             400,
             f"No se puede cambiar de '{cot.estado}' a '{data.estado}'. Transiciones válidas: {permitidos}",
         )
 
-    historial = cot.historial_estados or []
+    historial = list(cot.historial_estados or [])
     historial.append({"estado": data.estado, "fecha": datetime.now().isoformat()})
     cot.estado = data.estado
     cot.historial_estados = historial

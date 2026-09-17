@@ -16,7 +16,7 @@ from app.routers.importaciones import (
 )
 from app.routers.cotizaciones import (
     ESTADOS_VALIDOS as ESTADOS_COTIZACION,
-    TRANSICIONES as TRANSICIONES_COTIZACION,
+    transiciones_validas,
 )
 from app.routers.ordenes_compra import ESTADOS_OC
 from app.services.config_service import get_config
@@ -64,7 +64,9 @@ async def construir_referencias(db: Session, usuario) -> dict:
         "estados": {
             "cotizacion": {
                 "estados": ESTADOS_COTIZACION,
-                "transiciones": TRANSICIONES_COTIZACION,
+                "transiciones": {
+                    estado: transiciones_validas(estado) for estado in ESTADOS_COTIZACION
+                },
             },
             "importacion": {
                 "estados": ESTADOS_IMPORTACION,

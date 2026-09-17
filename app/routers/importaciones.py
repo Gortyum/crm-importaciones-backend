@@ -212,7 +212,7 @@ def cambiar_estado(importacion_id: int, data: ImportacionUpdateEstado, db: Sessi
             f"No se puede cambiar de '{imp.estado}' a '{data.estado}'. Transiciones válidas: {permitidos}",
         )
 
-    historial = imp.historial_estados or []
+    historial = list(imp.historial_estados or [])
     historial.append({"estado": data.estado, "fecha": datetime.now().isoformat()})
     imp.estado = data.estado
     imp.historial_estados = historial
