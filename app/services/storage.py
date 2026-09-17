@@ -11,21 +11,66 @@ Las credenciales y configuración se leen desde variables de entorno:
   R2_PUBLIC_URL          URL pública del bucket (dominio personalizado o r2.dev).
                          Solo afecta a archivos marcados como públicos. (opcional)
 
-Si alguna variable crítica falta, el servicio queda "no configurado" y los
-métodos de escritura lanzan R2NoConfigurado. El resto de la aplicación se
-mantiene operativa (los endpoints devuelven 503 con mensaje claro).
+El único interface de almacenamiento es ``Almacen`` (quick fix del reporte de
+arquitectura: un dueño de la regla público/firmado y un adaptador nulo en
+lugar de ``None``). ``obtener_storage()`` nunca devuelve ``None``: sin
+credenciales devuelve ``AlmacenNulo`` (lecturas en falso, escrituras lanzan
+``AlmacenNoConfigurado``); el resto de la aplicación se mantiene operativa
+(los endpoints devuelven 503 con mensaje claro).
 """
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+from typing import Protocol
 
 import boto3
 from botocore.client import Config
-from botocore.exceptions import BotoCoreError, ClientError
+from botocore.exceptions import ClientError
 
 
-class R2NoConfigurado(Exception):
+class AlmacenNoConfigurado(Exception):
     pass
+
+
+class Almacen(Protocol):
+    def url_publica(self, key: str) -> str | None: ...
+
+    def url_firmada(self, key: str, expira_segundos: int = 900) -> str: ...
+
+    def url(self, key: str, es_publico: bool, expira_segundos: int = 900) -> str: ...
+
+    def subir(self, key: str, contenido: bytes, content_type: str) -> None: ...
+
+    def eliminar(self, key: str) -> None: ...
+
+    def contenido(self, key: str) -> bytes: ...
+
+    def existe(self, key: str) -> bool: ...
+
+
+class AlmacenNulo:
+    """Adaptador para entornos sin R2 configurado: nada se persiste realmente."""
+
+    def url_publica(self, key: str) -> str | None:
+        return None
+
+    def url_firmada(self, key: str, expira_segundos: int = 900) -> str | None:
+        return None
+
+    def url(self, key: str, es_publico: bool, expira_segundos: int = 900) -> str | None:
+        return None
+
+    def subir(self, key: str, contenido: bytes, content_type: str) -> None:
+        raise AlmacenNoConfigurado()
+
+    def eliminar(self, key: str) -> None:
+        raise AlmacenNoConfigurado()
+
+    def contenido(self, key: str) -> bytes:
+        raise AlmacenNoConfigurado()
+
+    def existe(self, key: str) -> bool:
+        return False
 
 
 @dataclass
@@ -78,18 +123,24 @@ class R2Storage:
         )
 
     def url(self, key: str, es_publico: bool, expira_segundos: int = 900) -> str:
-        return self.url_publica(key) or (self.url_firmada(key, expira_segundos) if es_publico else self.url_firmada(key, expira_segundos))
+        """Regla única: URL pública si está disponible y el archivo es público;
+        en cualquier otro caso, URL firmada."""
+        if es_publico:
+            publica = self.url_publica(key)
+            if publica:
+                return publica
+        return self.url_firmada(key, expira_segundos)
 
 
 @lru_cache(maxsize=1)
-def obtener_storage() -> R2Storage | None:
-    """Devuelve la instancia configurada de R2Storage o None si faltan credenciales."""
+def obtener_storage() -> Almacen:
+    """Devuelve la instancia configurada de Almacen; AlmacenNulo si faltan credenciales."""
     account_id = os.getenv("R2_ACCOUNT_ID", "").strip()
     access_key = os.getenv("R2_ACCESS_KEY_ID", "").strip()
     secret = os.getenv("R2_SECRET_ACCESS_KEY", "").strip()
     bucket = os.getenv("R2_BUCKET_NAME", "").strip()
     if not (account_id and access_key and secret and bucket):
-        return None
+        return AlmacenNulo()
     return R2Storage(
         account_id=account_id,
         access_key_id=access_key,

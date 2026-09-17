@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -9,7 +8,7 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.database import engine, Base, SessionLocal, PROJECT_ROOT
+from app.database import engine, Base, SessionLocal
 from app.routers import (
     clientes,
     proveedores,
@@ -28,9 +27,9 @@ from app.routers import (
 from app.routers.auth import requiere_autenticacion
 from app.models.proveedor import ProveedorCategoria
 from app.services.config_service import ensure_config
+from app.services.demo_data import asegurar_bd_demo
+from app.services.image_processor import UPLOAD_DIR
 
-_UPLOAD_ENV = os.getenv("UPLOAD_DIR", "uploads")
-UPLOAD_DIR = (_UPLOAD_ENV if Path(_UPLOAD_ENV).is_absolute() else PROJECT_ROOT / _UPLOAD_ENV).resolve()
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")]
 
@@ -68,6 +67,10 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 def on_startup():
     Base.metadata.create_all(bind=engine)
     _migrar_columnas()
+    try:
+        asegurar_bd_demo()
+    except Exception as exc:  # la demo nunca debe tumbar la aplicación real
+        print(f"[demo] No se pudo preparar la base demo: {type(exc).__name__}")
     db = SessionLocal()
     try:
         categorias = ["Mercancia", "Logistica", "Aduana", "Flete Terrestre Local"]

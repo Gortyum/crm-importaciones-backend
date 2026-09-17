@@ -8,9 +8,9 @@ from PIL import Image, ImageEnhance
 from app.database import PROJECT_ROOT
 
 _UPLOAD_ENV = os.getenv("UPLOAD_DIR", "uploads")
-UPLOAD_DIR = str((Path(_UPLOAD_ENV) if Path(_UPLOAD_ENV).is_absolute() else PROJECT_ROOT / _UPLOAD_ENV).resolve())
-ORIG_DIR = os.path.join(UPLOAD_DIR, "originals")
-PROCESSED_DIR = UPLOAD_DIR
+UPLOAD_DIR = (Path(_UPLOAD_ENV) if Path(_UPLOAD_ENV).is_absolute() else PROJECT_ROOT / _UPLOAD_ENV).resolve()
+ORIG_DIR = os.path.join(str(UPLOAD_DIR), "originals")
+PROCESSED_DIR = str(UPLOAD_DIR)
 
 MAX_DIMENSION = 1200
 QUALITY = 78

@@ -22,6 +22,12 @@ from app.schemas.cotizacion import ItemCotizacionCreate
 from app.services.importacion_engine import calcular_importacion
 from app.services.config_service import get_config, ensure_config
 from app.services.cotizacion_engine import calcular_item
+from app.services.correlativos import (
+    SERIE_COTIZACION,
+    SERIE_IMPORTACION,
+    con_correlativo,
+    siguiente_correlativo,
+)
 
 router = APIRouter(prefix="/api/importaciones", tags=["importaciones"])
 
@@ -41,27 +47,8 @@ class PasarACotizacionRequest(BaseModel):
 
 
 def generar_correlativo(db: Session) -> str:
-    anio = datetime.now().year
-    ultimo = db.query(Importacion).filter(
-        Importacion.correlativo.like(f"IMP-{anio}-%")
-    ).order_by(Importacion.id.desc()).first()
-    if ultimo:
-        num = int(ultimo.correlativo.split("-")[-1]) + 1
-    else:
-        num = 1
-    return f"IMP-{anio}-{num:04d}"
-
-
-def generar_correlativo_cot(db: Session) -> str:
-    anio = datetime.now().year
-    ultimo = db.query(Cotizacion).filter(
-        Cotizacion.correlativo.like(f"COT-{anio}-%")
-    ).order_by(Cotizacion.id.desc()).first()
-    if ultimo:
-        num = int(ultimo.correlativo.split("-")[-1]) + 1
-    else:
-        num = 1
-    return f"COT-{anio}-{num:04d}"
+    """Compatibilidad: cotizaciones importa este helper al crear importaciones."""
+    return siguiente_correlativo(db, Importacion, SERIE_IMPORTACION)
 
 
 def _serializar(imp: Importacion, db: Session) -> ImportacionOut:
@@ -180,31 +167,32 @@ def obtener_importacion(importacion_id: int, db: Session = Depends(get_db)):
 @router.post("/", response_model=ImportacionOut, status_code=201)
 def crear_importacion(data: ImportacionCreate, db: Session = Depends(get_db)):
     ensure_config(db)
-    correlativo = generar_correlativo(db)
-    imp = Importacion(
-        correlativo=correlativo,
-        transporte=data.transporte,
-        cert_origen=data.cert_origen,
-        tc_usd_clp=data.tc_usd_clp,
-        tc_brl_usd=data.tc_brl_usd,
-        contingencia_pct=data.contingencia_pct,
-        notas=data.notas,
-        cotizacion_id=data.cotizacion_id,
-        estado="Borrador",
-        historial_estados=[{"estado": "Borrador", "fecha": datetime.now().isoformat()}],
-    )
-    db.add(imp)
-    db.flush()
 
-    for it in data.items:
-        db.add(ImportacionItem(importacion_id=imp.id, **it.model_dump()))
-    for c in data.costos:
-        db.add(ImportacionCosto(importacion_id=imp.id, **c.model_dump()))
-    for p in data.proveedores:
-        db.add(ImportacionProveedor(importacion_id=imp.id, **p.model_dump()))
+    def construir(correlativo: str) -> Importacion:
+        imp = Importacion(
+            correlativo=correlativo,
+            transporte=data.transporte,
+            cert_origen=data.cert_origen,
+            tc_usd_clp=data.tc_usd_clp,
+            tc_brl_usd=data.tc_brl_usd,
+            contingencia_pct=data.contingencia_pct,
+            notas=data.notas,
+            cotizacion_id=data.cotizacion_id,
+            estado="Borrador",
+            historial_estados=[{"estado": "Borrador", "fecha": datetime.now().isoformat()}],
+        )
+        db.add(imp)
+        db.flush()
 
-    db.commit()
-    db.refresh(imp)
+        for it in data.items:
+            db.add(ImportacionItem(importacion_id=imp.id, **it.model_dump()))
+        for c in data.costos:
+            db.add(ImportacionCosto(importacion_id=imp.id, **c.model_dump()))
+        for p in data.proveedores:
+            db.add(ImportacionProveedor(importacion_id=imp.id, **p.model_dump()))
+        return imp
+
+    imp = con_correlativo(db, Importacion, SERIE_IMPORTACION, construir)
     _guardar_calculos(imp, db)
     return _serializar(imp, db)
 
@@ -261,51 +249,52 @@ def pasar_a_cotizacion(importacion_id: int, data: PasarACotizacionRequest, db: S
     resultado = _serializar(imp, db).resultado
     items_res = {i["descripcion"]: i for i in resultado["items"]}
 
-    cot = Cotizacion(
-        correlativo=generar_correlativo_cot(db),
-        cliente_id=data.cliente_id,
-        contacto_id=data.contacto_id,
-        divisa_original="CLP",
-        tipo_cambio=1.0,
-        notas=f"Generada desde importación {imp.correlativo}",
-        estado="Creada",
-        historial_estados=[{"estado": "Creada", "fecha": datetime.now().isoformat()}],
-    )
-    db.add(cot)
-    db.flush()
-
-    for item_db in imp.items:
-        r = items_res.get(item_db.descripcion, {})
-        costo = item_db.costo_unitario_neto_clp or r.get("costo_unitario_neto_clp", 0)
-        target = item_db.precio_venta_neto_clp or r.get("precio_venta_neto_clp", 0)
-        margen = (target / costo - 1) * 100 if costo else 0
-        dummy = ItemCotizacionCreate(
-            cantidad=item_db.cantidad,
-            costo_original=costo,
-            margen_pct=max(margen, 0),
+    def construir(correlativo: str) -> Cotizacion:
+        cot = Cotizacion(
+            correlativo=correlativo,
+            cliente_id=data.cliente_id,
+            contacto_id=data.contacto_id,
+            divisa_original="CLP",
+            tipo_cambio=1.0,
+            notas=f"Generada desde importación {imp.correlativo}",
+            estado="Creada",
+            historial_estados=[{"estado": "Creada", "fecha": datetime.now().isoformat()}],
         )
-        calc = calcular_item(dummy)
-        db.add(ItemCotizacion(
-            cotizacion_id=cot.id,
-            producto_id=item_db.producto_id,
-            descripcion=item_db.descripcion,
-            cantidad=item_db.cantidad,
-            costo_original=costo,
-            divisa_origen="CLP",
-            costo_flete=0,
-            costo_envio=0,
-            margen_pct=max(margen, 0),
-            descuento_pct=0,
-            iva_pct=19,
-            precio_venta_unitario=calc["precio_venta_unitario"],
-            subtotal=calc["subtotal"],
-            iva_monto=calc["iva_monto"],
-            total=calc["total"],
-        ))
+        db.add(cot)
+        db.flush()
 
-    cot.importacion_id = imp.id
-    imp.cotizacion_id = cot.id
+        for item_db in imp.items:
+            r = items_res.get(item_db.descripcion, {})
+            costo = item_db.costo_unitario_neto_clp or r.get("costo_unitario_neto_clp", 0)
+            target = item_db.precio_venta_neto_clp or r.get("precio_venta_neto_clp", 0)
+            margen = (target / costo - 1) * 100 if costo else 0
+            dummy = ItemCotizacionCreate(
+                cantidad=item_db.cantidad,
+                costo_original=costo,
+                margen_pct=max(margen, 0),
+            )
+            calc = calcular_item(dummy)
+            db.add(ItemCotizacion(
+                cotizacion_id=cot.id,
+                producto_id=item_db.producto_id,
+                descripcion=item_db.descripcion,
+                cantidad=item_db.cantidad,
+                costo_original=costo,
+                divisa_origen="CLP",
+                costo_flete=0,
+                costo_envio=0,
+                margen_pct=max(margen, 0),
+                descuento_pct=0,
+                iva_pct=19,
+                precio_venta_unitario=calc["precio_venta_unitario"],
+                subtotal=calc["subtotal"],
+                iva_monto=calc["iva_monto"],
+                total=calc["total"],
+            ))
 
-    db.commit()
-    db.refresh(imp)
+        cot.importacion_id = imp.id
+        imp.cotizacion_id = cot.id
+        return cot
+
+    con_correlativo(db, Cotizacion, SERIE_COTIZACION, construir)
     return _serializar(imp, db)

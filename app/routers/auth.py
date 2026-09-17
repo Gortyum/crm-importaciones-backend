@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import get_db, es_peticion_demo
 from app.models.usuario import Usuario
 from app.schemas.usuario import (
     UsuarioLogin,
@@ -18,6 +18,7 @@ from app.services.auth_service import (
     decodificar_token,
 )
 from app.services.cache import cache_get, cache_set
+from app.services.demo_data import USUARIO_DEMO, asegurar_bd_demo
 from app.services.referencias import construir_referencias
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -59,9 +60,13 @@ def obtener_usuario_actual(
     return usuario
 
 
-async def referencias_para_usuario(db: Session, usuario: Usuario) -> dict:
-    """Referencias del usuario, servidas desde caché (Redis o memoria)."""
-    key = REFERENCIAS_KEY_PREFIX + usuario.username
+async def referencias_para_usuario(db: Session, usuario: Usuario, tenant: str = "prod") -> dict:
+    """Referencias del usuario, servidas desde caché (Redis o memoria).
+
+    La clave incluye el "tenant" (prod/demo) para que el modo demo nunca
+    reutilice referencias cacheadas de la aplicación real.
+    """
+    key = f"{REFERENCIAS_KEY_PREFIX}{tenant}:{usuario.username}"
     data = cache_get(key)
     if data is None:
         data = await construir_referencias(db, usuario)
@@ -80,6 +85,29 @@ async def login(data: UsuarioLogin, db: Session = Depends(get_db)):
         username=usuario.username,
         referencias=referencias,
     )
+
+
+@router.post("/demo-login", response_model=TokenOut)
+async def demo_login():
+    """Inicia sesión en el modo demo con datos 100% sintéticos.
+
+    La base de datos demo es independiente de la aplicación; el token que se
+    devuelve lleva la marca "demo" y get_db enruta todas sus consultas a esa
+    base. El usuario no necesita credenciales ni registro.
+    """
+    db = asegurar_bd_demo()
+    try:
+        usuario = db.query(Usuario).filter(Usuario.username == USUARIO_DEMO).first()
+        if not usuario:
+            raise HTTPException(status_code=503, detail="No se pudo preparar el modo demo")
+        referencias = await referencias_para_usuario(db, usuario, tenant="demo")
+        return TokenOut(
+            access_token=crear_token(usuario.username, demo=True),
+            username=usuario.username,
+            referencias=referencias,
+        )
+    finally:
+        db.close()
 
 
 @router.post("/register", response_model=TokenOut)
@@ -105,10 +133,12 @@ def obtener_me(usuario: Usuario = Depends(obtener_usuario_actual)):
 
 @router.get("/referencias")
 async def obtener_referencias(
+    request: Request,
     usuario: Usuario = Depends(obtener_usuario_actual),
     db: Session = Depends(get_db),
 ):
-    return await referencias_para_usuario(db, usuario)
+    tenant = "demo" if es_peticion_demo(request) else "prod"
+    return await referencias_para_usuario(db, usuario, tenant=tenant)
 
 
 @router.post("/cambiar-password")

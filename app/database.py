@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+from fastapi import Request
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
@@ -38,6 +39,23 @@ def _build_database_url() -> str:
 DATABASE_URL = _build_database_url()
 
 
+def _build_demo_database_url() -> str:
+    """URL de la base de datos demo (aislada de la aplicación).
+
+    Si `DEMO_DATABASE_URL` no está definida, usa una base SQLite local
+    (`crm_erp_demo.db`) que se recrea y repuebla automáticamente al iniciar.
+    """
+    url = os.getenv("DEMO_DATABASE_URL")
+    if url:
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+psycopg2://", 1)
+        return url
+    return os.getenv("SQLITE_URL", "sqlite:///./crm_erp_demo.db")
+
+
+DEMO_DATABASE_URL = _build_demo_database_url()
+
+
 def _resolve_sqlite_url(url: str) -> str:
     # Solo se aplica al fallback SQLite local; Postgres se usa tal cual.
     if not url.startswith("sqlite:///"):
@@ -58,13 +76,38 @@ else:
 engine = create_engine(_resolved_url, connect_args=connect_args, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
+_demo_resolved_url = _resolve_sqlite_url(DEMO_DATABASE_URL)
+
+if _demo_resolved_url.startswith("sqlite"):
+    demo_connect_args = {"check_same_thread": False}
+else:
+    demo_connect_args = {}
+
+demo_engine = create_engine(_demo_resolved_url, connect_args=demo_connect_args, pool_pre_ping=True)
+DemoSessionLocal = sessionmaker(bind=demo_engine, autoflush=False, autocommit=False)
+
 
 class Base(DeclarativeBase):
     pass
 
 
-def get_db():
-    db = SessionLocal()
+def es_peticion_demo(request: Request) -> bool:
+    """True si el token Bearer de la petición es un token de modo demo."""
+    auth = request.headers.get("authorization", "")
+    if not auth.lower().startswith("bearer "):
+        return False
+    from app.services.auth_service import es_token_demo
+
+    return es_token_demo(auth.split(" ", 1)[1].strip())
+
+
+def get_db(request: Request):
+    """Sesión de BD según el alcance del token: demo o producción.
+
+    El modo demo se sirve desde una base de datos aislada (demo_engine);
+    la base real de la aplicación nunca se consulta con un token demo.
+    """
+    db = DemoSessionLocal() if es_peticion_demo(request) else SessionLocal()
     try:
         yield db
     finally:

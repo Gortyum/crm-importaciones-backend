@@ -26,8 +26,3 @@ class Archivo(Base):
     es_publico: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-
-    @property
-    def key(self) -> str:
-        """Ruta completa dentro del bucket: <carpeta>/<uuid>.<ext>"""
-        return self.object_key

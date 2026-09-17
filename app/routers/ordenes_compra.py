@@ -1,5 +1,3 @@
-from datetime import datetime
-
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -13,22 +11,11 @@ from app.schemas.orden_compra import (
     OrdenCompraPDFData,
     ItemOrdenCompraPDF,
 )
+from app.services.correlativos import SERIE_ORDEN_COMPRA, con_correlativo
 
 router = APIRouter(prefix="/api/ordenes-compra", tags=["ordenes-compra"])
 
 ESTADOS_OC = ["Pendiente", "Confirmada", "En Produccion", "Recibida", "Cancelada"]
-
-
-def generar_correlativo_oc(db: Session) -> str:
-    anio = datetime.now().year
-    ultimo = db.query(OrdenCompra).filter(
-        OrdenCompra.correlativo.like(f"OC-{anio}-%")
-    ).order_by(OrdenCompra.id.desc()).first()
-    if ultimo:
-        num = int(ultimo.correlativo.split("-")[-1]) + 1
-    else:
-        num = 1
-    return f"OC-{anio}-{num:04d}"
 
 
 @router.get("/", response_model=list[OrdenCompraOut])
@@ -76,35 +63,35 @@ def crear_desde_cotizacion(data: OrdenCompraCreate, db: Session = Depends(get_db
     if not items_cot:
         raise HTTPException(400, "No hay items de este proveedor en la cotización")
 
-    correlativo = generar_correlativo_oc(db)
-    oc = OrdenCompra(
-        correlativo=correlativo,
-        cotizacion_id=cot.id,
-        proveedor_id=data.proveedor_id,
-        notas=data.notas,
-        estado="Pendiente",
-    )
-    db.add(oc)
-    db.flush()
-
-    for item_cot in items_cot:
-        costo_unit = item_cot.costo_original
-        divisa_item = item_cot.divisa_origen or "USD"
-        subtotal = round(costo_unit * item_cot.cantidad, 2)
-        item = ItemOrdenCompra(
-            orden_id=oc.id,
-            producto_id=item_cot.producto_id,
-            descripcion=item_cot.descripcion,
-            cantidad=item_cot.cantidad,
-            costo_unitario=round(costo_unit, 2),
-            divisa=divisa_item,
-            tipo_personalizacion=item_cot.tipo_personalizacion,
-            subtotal=subtotal,
+    def construir(correlativo: str) -> OrdenCompra:
+        oc = OrdenCompra(
+            correlativo=correlativo,
+            cotizacion_id=cot.id,
+            proveedor_id=data.proveedor_id,
+            notas=data.notas,
+            estado="Pendiente",
         )
-        db.add(item)
+        db.add(oc)
+        db.flush()
 
-    db.commit()
-    db.refresh(oc)
+        for item_cot in items_cot:
+            costo_unit = item_cot.costo_original
+            divisa_item = item_cot.divisa_origen or "USD"
+            subtotal = round(costo_unit * item_cot.cantidad, 2)
+            item = ItemOrdenCompra(
+                orden_id=oc.id,
+                producto_id=item_cot.producto_id,
+                descripcion=item_cot.descripcion,
+                cantidad=item_cot.cantidad,
+                costo_unitario=round(costo_unit, 2),
+                divisa=divisa_item,
+                tipo_personalizacion=item_cot.tipo_personalizacion,
+                subtotal=subtotal,
+            )
+            db.add(item)
+        return oc
+
+    oc = con_correlativo(db, OrdenCompra, SERIE_ORDEN_COMPRA, construir)
 
     total = sum(i.subtotal for i in oc.items)
     out = OrdenCompraOut.model_validate(oc)

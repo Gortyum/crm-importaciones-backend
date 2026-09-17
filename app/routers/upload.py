@@ -1,20 +1,20 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
 
 from app.services.image_processor import process_image
+from app.services.validacion_archivos import MAX_IMG, validar_extension
 
 router = APIRouter(prefix="/api/upload", tags=["upload"])
-
-ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
-MAX_SIZE = 10 * 1024 * 1024  # 10MB
 
 
 @router.post("/")
 async def upload_image(file: UploadFile = File(...)):
-    if file.content_type not in ALLOWED_TYPES:
-        raise HTTPException(400, f"Tipo de archivo no permitido: {file.content_type}")
+    ext = (file.filename or "image.jpg").rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else ""
+    if not ext:
+        raise HTTPException(400, "El archivo debe tener extensión")
+    validar_extension("producto", ext, (file.content_type or "").lower())
 
     contents = await file.read()
-    if len(contents) > MAX_SIZE:
+    if len(contents) > MAX_IMG:
         raise HTTPException(400, "El archivo supera los 10MB")
 
     try:

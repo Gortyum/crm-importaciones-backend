@@ -12,22 +12,9 @@ from app.schemas.documento import (
     DocumentoPDFData,
     DocumentoProductoPDF,
 )
+from app.services.correlativos import SERIE_DOCUMENTO, con_correlativo
 
 router = APIRouter(prefix="/api/documentos", tags=["documentos"])
-
-
-def generar_correlativo(db: Session) -> str:
-    ultimo = (
-        db.query(Documento)
-        .filter(Documento.correlativo.like("PDF %"))
-        .order_by(Documento.id.desc())
-        .first()
-    )
-    if ultimo:
-        num = int(ultimo.correlativo.split(" ")[-1]) + 1
-    else:
-        num = 1
-    return f"PDF {num}"
 
 
 def _productos_de_cot(cot: Cotizacion) -> list[DocumentoProductoPDF]:
@@ -75,15 +62,17 @@ def crear_documento(
     if not cot:
         raise HTTPException(400, "Cotización no encontrada")
 
-    doc = Documento(
-        correlativo=generar_correlativo(db),
-        cotizacion_id=cot.id,
-        especificaciones=data.especificaciones.model_dump() if data.especificaciones else None,
-        created_by=usuario.username,
-    )
-    db.add(doc)
-    db.commit()
-    db.refresh(doc)
+    def construir(correlativo: str) -> Documento:
+        doc = Documento(
+            correlativo=correlativo,
+            cotizacion_id=cot.id,
+            especificaciones=data.especificaciones.model_dump() if data.especificaciones else None,
+            created_by=usuario.username,
+        )
+        db.add(doc)
+        return doc
+
+    doc = con_correlativo(db, Documento, SERIE_DOCUMENTO, construir)
     return _armar_out(doc, db)
 
 

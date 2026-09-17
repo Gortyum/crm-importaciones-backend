@@ -20,15 +20,26 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
-def crear_token(username: str) -> str:
+def crear_token(username: str, demo: bool = False) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     payload = {"sub": username, "exp": expire}
+    if demo:
+        payload["demo"] = True
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
-def decodificar_token(token: str) -> str | None:
+def decodificar_payload(token: str) -> dict | None:
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload.get("sub")
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except jwt.PyJWTError:
         return None
+
+
+def es_token_demo(token: str) -> bool:
+    payload = decodificar_payload(token)
+    return bool(payload and payload.get("demo"))
+
+
+def decodificar_token(token: str) -> str | None:
+    payload = decodificar_payload(token)
+    return payload.get("sub") if payload else None
