@@ -13,16 +13,17 @@ from app.schemas.documento import (
     DocumentoProductoPDF,
 )
 from app.services.correlativos import SERIE_DOCUMENTO, con_correlativo
+from app.services.imagenes import url_imagen_fresca
 
 router = APIRouter(prefix="/api/documentos", tags=["documentos"])
 
 
-def _productos_de_cot(cot: Cotizacion) -> list[DocumentoProductoPDF]:
+def _productos_de_cot(cot: Cotizacion, db: Session) -> list[DocumentoProductoPDF]:
     return [
         DocumentoProductoPDF(
             descripcion=item.descripcion or "Item",
             cantidad=item.cantidad or 1,
-            imagen_url=item.imagen_url or "",
+            imagen_url=url_imagen_fresca(db, item.producto_id, item.imagen_url or ""),
         )
         for item in (cot.items or [])
     ]
@@ -30,7 +31,7 @@ def _productos_de_cot(cot: Cotizacion) -> list[DocumentoProductoPDF]:
 
 def _armar_out(doc: Documento, db: Session) -> DocumentoOut:
     cot = db.query(Cotizacion).get(doc.cotizacion_id)
-    productos = _productos_de_cot(cot) if cot else []
+    productos = _productos_de_cot(cot, db) if cot else []
     return DocumentoOut(
         id=doc.id,
         correlativo=doc.correlativo,
@@ -91,7 +92,7 @@ def datos_pdf_documento(documento_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Documento no encontrado")
 
     cot = db.query(Cotizacion).get(doc.cotizacion_id)
-    productos = _productos_de_cot(cot) if cot else []
+    productos = _productos_de_cot(cot, db) if cot else []
     return DocumentoPDFData(
         correlativo=doc.correlativo,
         fecha=cot.fecha if cot else None,

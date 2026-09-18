@@ -17,6 +17,7 @@ from app.schemas.cotizacion import (
     CotizacionImportacion,
 )
 from app.services.cotizacion_engine import calcular_item
+from app.services.imagenes import url_imagen_fresca
 
 router = APIRouter(prefix="/api/cotizaciones", tags=["cotizaciones"])
 
@@ -86,6 +87,8 @@ def _aplicar_landed_a_items(db: Session, cot: Cotizacion, imp_items: list) -> No
 def _completar_out(cot, db) -> CotizacionOut:
     out = CotizacionOut.model_validate(cot)
     out.total_general = _total_cotizacion(cot)
+    for item_db, item_out in zip(cot.items, out.items):
+        item_out.imagen_url = url_imagen_fresca(db, item_db.producto_id, item_db.imagen_url)
     out.cliente = db.query(Cliente).get(cot.cliente_id)
     if cot.contacto_id:
         out.contacto = db.query(Contacto).get(cot.contacto_id)
@@ -477,7 +480,7 @@ def obtener_datos_pdf(cotizacion_id: int, db: Session = Depends(get_db)):
             descripcion=item.descripcion,
             cantidad=item.cantidad,
             divisa_origen=item.divisa_origen,
-            imagen_url=item.imagen_url,
+            imagen_url=url_imagen_fresca(db, item.producto_id, item.imagen_url),
             precio_venta_unitario=item.precio_venta_unitario,
             tipo_personalizacion=item.tipo_personalizacion,
             subtotal=item.subtotal,
