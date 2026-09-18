@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Integer, String, Float, DateTime, ForeignKey, JSON, Boolean, func
+from sqlalchemy import Integer, String, Float, DateTime, ForeignKey, JSON, Boolean, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -40,7 +40,7 @@ class ItemCotizacion(Base):
     cotizacion_id: Mapped[int] = mapped_column(Integer, ForeignKey("cotizaciones.id"), nullable=False)
     producto_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("productos.id"), nullable=True)
     proveedor_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("proveedores.id"), nullable=True)
-    descripcion: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    descripcion: Mapped[str] = mapped_column(Text, nullable=False, default="")
     cantidad: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     costo_original: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     divisa_origen: Mapped[str] = mapped_column(String(5), nullable=False, default="CLP")

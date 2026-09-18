@@ -193,3 +193,26 @@ def test_importacion_vinculada_recalcula_landed(client, auth_headers):
 
     pdf = client.get(f"/api/cotizaciones/{cot['id']}/pdf-data", headers=auth_headers).json()
     assert pdf["total_general"] == detalle["total_general"]
+
+
+def test_descripcion_larga_se_conserva_entera(client, auth_headers):
+    """Las descripciones de producto largas no deben truncarse (varchar 300)."""
+    descripcion_larga = (
+        "Neceser de mano personalizado en neopreno. Material: neopreno de 3 mm, "
+        "resistente, flexible y con protección ante impactos leves. Revestimiento: "
+        "doble capa de poliéster. Medidas: 20 × 15 × 26 cm (alto × ancho). Asa: "
+        "cinta CTF reforzada para transporte manual. Personalización: apto para "
+        "logotipos, diseños y estampados a todo color en alta definición."
+    ) * 3
+    assert len(descripcion_larga) > 300
+
+    cli = crear_cliente(client, auth_headers)
+    p1 = crear_producto(client, auth_headers, "Neceser Neopreno")
+    payload = item_payload(p1["id"], cantidad=60, costo=15.75, divisa="BRL", tc=190.97, margen=20)
+    payload["descripcion"] = descripcion_larga
+
+    cot = crear_cotizacion(client, auth_headers, cli["id"], [payload])
+    assert cot["items"][0]["descripcion"] == descripcion_larga
+
+    detalle = client.get(f"/api/cotizaciones/{cot['id']}", headers=auth_headers).json()
+    assert detalle["items"][0]["descripcion"] == descripcion_larga

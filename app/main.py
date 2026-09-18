@@ -130,6 +130,18 @@ def _migrar_columnas():
                 conn.execute(text("DROP INDEX IF EXISTS ix_archivos_object_key"))
                 conn.execute(text("ALTER TABLE archivos DROP CONSTRAINT IF EXISTS archivos_object_key_key"))
 
+    if engine.dialect.name == "postgresql":
+        # Las descripciones de producto pueden superar los 300 caracteres; se amplían
+        # a TEXT en las tablas que heredan la descripción del producto.
+        for tabla, columna in (
+            ("items_cotizacion", "descripcion"),
+            ("importacion_items", "descripcion"),
+            ("items_orden_compra", "descripcion"),
+        ):
+            if tabla in insp.get_table_names():
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE {tabla} ALTER COLUMN {columna} TYPE TEXT"))
+
 
 @app.get("/api/health")
 def health():
