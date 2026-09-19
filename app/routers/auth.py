@@ -8,7 +8,6 @@ from app.schemas.usuario import (
     UsuarioLogin,
     TokenOut,
     CambioPassword,
-    UsuarioRegistro,
     UsuarioOut,
 )
 from app.services.auth_service import (
@@ -108,22 +107,6 @@ async def demo_login():
         )
     finally:
         db.close()
-
-
-@router.post("/register", response_model=TokenOut)
-def registrar(data: UsuarioRegistro, db: Session = Depends(get_db)):
-    """Registro de usuario (temporal; se retira cuando se indique)."""
-    username = data.username.strip()
-    if not username:
-        raise HTTPException(status_code=400, detail="El usuario no puede estar vacío")
-    if not data.password:
-        raise HTTPException(status_code=400, detail="La contraseña no puede estar vacía")
-    if db.query(Usuario).filter(Usuario.username == username).first():
-        raise HTTPException(status_code=400, detail="Ese usuario ya existe")
-    usuario = Usuario(username=username, password_hash=hash_password(data.password))
-    db.add(usuario)
-    db.commit()
-    return TokenOut(access_token=crear_token(usuario.username), username=usuario.username)
 
 
 @router.get("/me", response_model=UsuarioOut)

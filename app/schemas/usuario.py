@@ -24,8 +24,3 @@ class UsuarioOut(BaseModel):
 class CambioPassword(BaseModel):
     password_actual: str
     password_nueva: str
-
-
-class UsuarioRegistro(BaseModel):
-    username: str
-    password: str
